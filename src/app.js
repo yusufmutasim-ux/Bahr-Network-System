@@ -170,6 +170,7 @@ function createApp(db, { now = () => new Date() } = {}) {
       now: t,
       work_day: isWorkDay(t.date, s),
       on_leave: onLeave,
+      ...(await attendanceStats(req.user, s, t)),
       check_in_window:
         toMinutes(t.time) < toMinutes(s.early_start) ? 'not_open' : toMinutes(t.time) >= toMinutes(s.close) ? 'closed' : 'open',
       attendance: attendance || null,
@@ -352,14 +353,62 @@ function createApp(db, { now = () => new Date() } = {}) {
       else if (!isWorkDay(date, s)) r.status = 'off_day';
       else r.status = closed ? 'absent' : 'waiting';
     }
+    const trendFrom = addDays(date, -6);
+    const trendRows = await db.all(
+      `SELECT work_date, COUNT(*) AS present, COUNT(*) FILTER (WHERE status IN ('late', 'very_late')) AS late,
+              COUNT(*) FILTER (WHERE status = 'early') AS early
+       FROM attendance WHERE work_date BETWEEN ? AND ? GROUP BY work_date`,
+      [trendFrom, date],
+    );
+    const trend = eachDate(trendFrom, date).map((d) => {
+      const r = trendRows.find((x) => x.work_date === d) || {};
+      return { date: d, work_day: isWorkDay(d, s), present: Number(r.present || 0), late: Number(r.late || 0), early: Number(r.early || 0) };
+    });
     res.json({
       date,
       now: t,
       work_day: isWorkDay(date, s),
       rows,
+      trend,
       pending: { leaves: Number(pending.leaves), rewards: Number(pending.rewards) },
       rules: pickRules(s),
     });
+  });
+
+  // Recent activity across the company for the owner's live feed.
+  app.get('/api/admin/feed', requireOwner, async (req, res) => {
+    const rows = await db.all(
+      `SELECT * FROM (
+         (SELECT 'checkin' AS type, a.user_id, u.name, a.status AS detail, a.check_in_at AS at,
+                 a.check_in_time AS extra, a.distance_m AS amount
+          FROM attendance a JOIN users u ON u.id = a.user_id ORDER BY a.check_in_at DESC LIMIT 25)
+         UNION ALL
+         (SELECT 'leave', l.user_id, u.name, l.status, l.created_at, l.from_date || ' → ' || l.to_date, NULL
+          FROM leave_requests l JOIN users u ON u.id = l.user_id ORDER BY l.created_at DESC LIMIT 15)
+         UNION ALL
+         (SELECT 'reward', r.user_id, u.name, r.status, r.created_at, r.method, r.amount
+          FROM reward_requests r JOIN users u ON u.id = r.user_id ORDER BY r.created_at DESC LIMIT 15)
+         UNION ALL
+         (SELECT 'points', p.user_id, u.name, p.kind, p.created_at, p.reason, p.delta
+          FROM points p JOIN users u ON u.id = p.user_id WHERE p.source IN ('manual', 'absent', 'redeem')
+          ORDER BY p.created_at DESC LIMIT 15)
+       ) feed ORDER BY at DESC LIMIT 40`,
+    );
+    res.json(rows);
+  });
+
+  // Monthly ranking by green points (fewer red / black breaks ties). Visible to everyone as motivation.
+  app.get('/api/leaderboard', requireUser, async (req, res) => {
+    const s = await settings();
+    const month = isMonth(req.query.month) ? req.query.month : localToday(s).date.slice(0, 7);
+    const rows = (await monthReport(db, s, month))
+      .filter((r) => r.active)
+      .map((r) => ({
+        user_id: r.user_id, name: r.name, job_title: r.job_title, green: r.green_month, red: r.red,
+        black: r.black, early: r.early, days_present: r.days_present,
+      }))
+      .sort((a, b) => b.green - a.green || a.red + a.black * 2 - (b.red + b.black * 2) || b.days_present - a.days_present);
+    res.json({ month, rows });
   });
 
   app.get('/api/admin/users', requireOwner, async (req, res) => {
@@ -595,6 +644,38 @@ function createApp(db, { now = () => new Date() } = {}) {
       userId: r.user_id, kind: 'green', delta: r.points, workDate: localToday(s).date,
       source: 'reward_refund', reason: 'Reward request refund', refId: r.id, createdBy: by,
     });
+  }
+
+  // Current streak of early / on-time work days and this month's attendance rate.
+  async function attendanceStats(user, s, t) {
+    const from = addDays(t.date, -90);
+    const [att, leaves] = await Promise.all([
+      db.all('SELECT work_date, status FROM attendance WHERE user_id = ? AND work_date >= ?', [user.id, from]),
+      db.all(
+        `SELECT from_date, to_date FROM leave_requests WHERE user_id = ? AND status = 'approved' AND to_date >= ?`,
+        [user.id, from],
+      ),
+    ]);
+    const byDate = new Map(att.map((a) => [a.work_date, a.status]));
+    const onLeave = (d) => leaves.some((l) => d >= l.from_date && d <= l.to_date);
+    let streak = 0;
+    for (let d = t.date; d >= from && d >= user.start_date; d = addDays(d, -1)) {
+      if (!isWorkDay(d, s) || onLeave(d)) continue;
+      const st = byDate.get(d);
+      if (!st && d === t.date) continue; // today isn't over yet
+      if (st === 'early' || st === 'on_time') streak += 1;
+      else break;
+    }
+    const monthStart = `${t.date.slice(0, 7)}-01`;
+    const start = user.start_date > monthStart ? user.start_date : monthStart;
+    const checkedToday = byDate.has(t.date) || toMinutes(t.time) >= toMinutes(s.close);
+    const end = checkedToday ? t.date : addDays(t.date, -1);
+    const due = start <= end ? eachDate(start, end).filter((d) => isWorkDay(d, s) && !onLeave(d)) : [];
+    const present = due.filter((d) => byDate.has(d)).length;
+    return {
+      streak,
+      month_stats: { work_days: due.length, present, rate: due.length ? Math.round((present / due.length) * 100) : 100 },
+    };
   }
 
   async function historyFor(userId, month) {

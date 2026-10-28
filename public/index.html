@@ -3,30 +3,64 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0b4f6c">
+  <meta name="theme-color" content="#eef4f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0b1110" media="(prefers-color-scheme: dark)">
   <title>Bahr Network — Attendance</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
+  <script>
+    // Apply saved theme / sidebar state before first paint to avoid a flash.
+    try {
+      const t = localStorage.getItem('bahr.theme');
+      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      if (localStorage.getItem('bahr.sidebar') === 'collapsed') document.documentElement.classList.add('sidebar-collapsed');
+    } catch {}
+  </script>
 </head>
 <body>
-  <header class="topbar" id="topbar" hidden>
-    <div class="brand">
-      <img src="/icon.svg" alt="" width="32" height="32">
-      <div>
-        <strong id="company-name">Bahr Network</strong>
-        <small id="user-name"></small>
+  <div class="shell" id="shell" hidden>
+    <aside class="sidebar" id="sidebar">
+      <div class="brand" id="brand"></div>
+      <div class="menu-head">
+        <span>Menu</span>
+        <button class="icon-btn ghost" id="collapse-btn" type="button" aria-label="Collapse sidebar"></button>
       </div>
+      <nav id="nav" class="nav"></nav>
+      <div class="sidebar-foot">
+        <div class="util-row" id="util-row"></div>
+        <div class="user-card" id="user-card"></div>
+      </div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn mobile-only" id="menu-btn" type="button" aria-label="Open menu"></button>
+        <button class="search" id="search-btn" type="button">
+          <span class="search-ico"></span>
+          <span class="search-text">Search pages, staff…</span>
+          <kbd>⌘K</kbd>
+        </button>
+        <div class="topbar-right">
+          <div class="online" id="online"></div>
+          <button class="icon-btn" id="theme-btn" type="button" aria-label="Toggle dark mode"></button>
+          <div class="pop-wrap">
+            <button class="icon-btn" id="bell-btn" type="button" aria-label="Notifications"></button>
+            <div class="popover" id="notif" hidden></div>
+          </div>
+        </div>
+      </header>
+      <main id="app" class="page"></main>
     </div>
-    <button class="btn ghost small" id="logout-btn" type="button">Log out</button>
-  </header>
-  <nav class="tabs" id="nav" hidden></nav>
-  <main id="app" class="container"></main>
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <dialog id="modal"></dialog>
+    <nav class="bottom-nav" id="bottom-nav"></nav>
+  </div>
+  <main id="auth" class="auth-screen" hidden></main>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <dialog id="modal" class="modal"></dialog>
+  <dialog id="palette" class="palette"></dialog>
   <script src="/app.js"></script>
 </body>
 </html>

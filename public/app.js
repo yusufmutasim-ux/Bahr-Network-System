@@ -1,62 +1,169 @@
 'use strict';
 
-// ---------- Helpers ----------
+/* =========================================================================
+   Bahr Network — Attendance & staff management (vanilla JS SPA)
+   ========================================================================= */
+
+// ---------- Tiny helpers ----------
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const app = $('#app');
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ESC[c]);
+const store = {
+  get(k, d = null) { try { return localStorage.getItem(`bahr.${k}`) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(`bahr.${k}`, v); } catch { /* private mode */ } },
+};
+
+const ICONS = {
+  home: '<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  pin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  star: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  gift: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C9 3 12 8 12 8s3-5 4.5-5a2.5 2.5 0 0 1 0 5"/>',
+  chart: '<path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
+  moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M8 16H3v5"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  minus: '<path d="M5 12h14"/>',
+  trophy: '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>',
+  arrow: '<path d="M7 17 17 7M7 7h10v10"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+  panel: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+  login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>',
+  wallet: '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>',
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  at: '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>',
+  briefcase: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+  pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
+  printer: '<path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
+  more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+  ban: '<circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/>',
+  flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>',
+};
+const icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+
+// The Bahr Network mark (five joined "bubbles"), drawn in currentColor.
+let markSeq = 0;
+function logoMark(size = 32) {
+  const id = `goo${++markSeq}`;
+  return `<svg class="mark" viewBox="30 50 215 295" width="${size}" height="${Math.round(size * 1.37)}" aria-hidden="true">
+    <defs><filter id="${id}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="8"/>
+      <feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 24 -11"/></filter></defs>
+    <g fill="currentColor" stroke="currentColor" stroke-linecap="round" filter="url(#${id})">
+      <path d="M100 92 Q132 104 156 146" fill="none" stroke-width="12"/><path d="M156 146 Q140 186 121 212" fill="none" stroke-width="13"/>
+      <path d="M121 212 Q160 246 198 268" fill="none" stroke-width="14"/><path d="M198 268 Q140 280 70 302" fill="none" stroke-width="27"/>
+      <circle cx="100" cy="90" r="30" stroke="none"/><circle cx="158" cy="148" r="37" stroke="none"/><circle cx="121" cy="212" r="31" stroke="none"/>
+      <circle cx="200" cy="268" r="32" stroke="none"/><circle cx="70" cy="305" r="30" stroke="none"/>
+    </g></svg>`;
+}
+const wordmark = () => `<span class="wm"><b>BAHR</b><i>NETWORK</i></span>`;
+
+const PALETTE = ['lime', 'teal', 'pink', 'sky', 'amber', 'slate'];
+function initials(name) {
+  const parts = String(name || '?').trim().split(/\s+/);
+  return ((parts[0]?.[0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : parts[0]?.[1] || '')).toUpperCase();
+}
+function hue(name) {
+  let h = 0;
+  for (const c of String(name)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return PALETTE[h % PALETTE.length];
+}
+const avatar = (name, size = '') => `<span class="avatar ${size} ${hue(name)}" title="${esc(name)}">${esc(initials(name))}</span>`;
+
+// ---------- Labels ----------
 
 const STATUS = {
-  early: ['Early', 'green'],
-  on_time: ['On time', 'brand'],
-  late: ['Late', 'red'],
-  very_late: ['Very late', 'red'],
-  off_day: ['Day off', ''],
+  early: ['Early', 'lime'],
+  on_time: ['On time', 'teal'],
+  late: ['Late', 'pink'],
+  very_late: ['Very late', 'pink'],
+  off_day: ['Day off', 'slate'],
   leave: ['On leave', 'amber'],
-  absent: ['Absent', 'black'],
-  waiting: ['Not checked in', ''],
+  absent: ['Absent', 'dark'],
+  waiting: ['Not yet', ''],
   not_started: ['Starts later', ''],
 };
-const KIND = { green: 'Green', red: 'Red', black: 'Black' };
+const KIND = { green: ['Green', 'lime'], red: ['Red', 'pink'], black: ['Black', 'dark'] };
 const SOURCE = {
-  early: 'Early check-in',
-  late: 'Late check-in',
-  absent: 'Absence',
-  manual: 'Owner adjustment',
-  redeem: 'Green → Red swap',
-  reward: 'Reward request',
-  reward_refund: 'Reward refund',
+  early: 'Early check-in', late: 'Late check-in', absent: 'Absence', manual: 'Owner adjustment',
+  redeem: 'Green → Red swap', reward: 'Reward request', reward_refund: 'Reward refund',
 };
 const REQ = {
-  pending: ['Pending', 'amber'],
-  approved: ['Approved', 'green'],
-  paid: ['Paid', 'green'],
-  rejected: ['Rejected', 'red'],
-  cancelled: ['Cancelled', ''],
+  pending: ['Pending', 'amber'], approved: ['Approved', 'lime'], paid: ['Paid', 'lime'],
+  rejected: ['Rejected', 'pink'], cancelled: ['Cancelled', 'slate'],
 };
 const METHODS = { instapay: 'InstaPay', vodafone_cash: 'Vodafone Cash', cash: 'Cash' };
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-const badge = (map, key) => {
+const chip = (map, key, dot = true) => {
   const [label, cls] = map[key] || [key, ''];
-  return `<span class="badge ${cls}">${esc(label)}</span>`;
+  return `<span class="chip ${cls}">${dot ? '<span class="dot"></span>' : ''}${esc(label)}</span>`;
 };
-const kindBadge = (kind, delta) =>
-  `<span class="badge ${kind}"><span class="num">${delta > 0 ? '+' : ''}${delta}</span> ${KIND[kind]}</span>`;
+const pointsChip = (kind, delta) =>
+  `<span class="chip ${KIND[kind][1]}"><span class="num">${delta > 0 ? '+' : ''}${delta}</span> ${KIND[kind][0]}</span>`;
+
+// ---------- Formatting ----------
 
 function fmtTime(hhmm) {
   if (!hhmm) return '—';
   const [h, m] = hhmm.split(':').map(Number);
   return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
 }
-function fmtDate(d) {
+const toDate = (d) => new Date(`${String(d).slice(0, 10)}T12:00:00Z`);
+function fmtDate(d, opts = { weekday: 'short', day: 'numeric', month: 'short' }) {
   if (!d) return '—';
-  return new Date(`${d.slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-GB', {
-    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC',
-  });
+  return toDate(d).toLocaleDateString('en-GB', { ...opts, timeZone: 'UTC' });
 }
-const money = (n, cur) => `${Number(n || 0).toLocaleString('en-US')} ${esc(cur || 'EGP')}`;
+const fmtLong = (d) => fmtDate(d, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+const fmtMonth = (m) => toDate(`${m}-01`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+function relTime(iso) {
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (!Number.isFinite(s)) return '';
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  if (s < 604800) return `${Math.floor(s / 86400)}d ago`;
+  return fmtDate(iso);
+}
+const shortWhen = (iso) => {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}<br>${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+};
+const money = (n, cur = rules().currency) => `${Number(n || 0).toLocaleString('en-US')} ${esc(cur || 'EGP')}`;
+const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+const daysBetween = (a, b) => Math.round((toDate(b) - toDate(a)) / 864e5);
+const localISODate = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const thisMonth = () => localISODate().slice(0, 7);
+const toMin = (t) => {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+};
+function greeting() {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+}
+
+// ---------- API & UI primitives ----------
 
 async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(`/api${path}`, {
@@ -74,20 +181,20 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-let toastTimer;
 function toast(msg, type = '') {
-  const el = $('#toast');
-  el.textContent = msg;
-  el.className = `toast show ${type}`;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.className = 'toast'), 3500);
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `${icon(type === 'error' ? 'alert' : 'check')}<span>${esc(msg)}</span>`;
+  $('#toasts').append(el);
+  setTimeout(() => {
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 300);
+  }, 3600);
 }
 
-function formData(form) {
-  return Object.fromEntries(new FormData(form).entries());
-}
+const formData = (form) => Object.fromEntries(new FormData(form).entries());
 
-// Run an async action from a form or button, with busy state and error toasts.
+// Runs an async action with a busy button and error toast.
 async function act(btn, fn, okMsg) {
   if (btn) btn.disabled = true;
   try {
@@ -103,154 +210,408 @@ async function act(btn, fn, okMsg) {
   }
 }
 
-function modal(html, onSubmit) {
+function modal({ title, sub = '', body, submit = 'Save', danger = false, onSubmit }) {
   const dlg = $('#modal');
-  dlg.innerHTML = `<form class="card" method="dialog">${html}
-    <div class="btn-row" style="margin-top:12px">
-      <button class="btn" type="submit">Save</button>
-      <button class="btn light" type="button" data-close>Cancel</button>
-    </div></form>`;
+  dlg.innerHTML = `<form class="card" method="dialog">
+      <div class="row between"><h2>${esc(title)}</h2><button class="icon-btn ghost" type="button" data-close aria-label="Close">${icon('x')}</button></div>
+      ${sub ? `<p class="muted small" style="margin-bottom:14px">${sub}</p>` : '<div style="height:10px"></div>'}
+      ${body}
+      <div class="modal-actions">
+        <button class="btn light" type="button" data-close>Cancel</button>
+        <button class="btn ${danger ? 'red' : ''}" type="submit">${esc(submit)}</button>
+      </div></form>`;
   const form = $('form', dlg);
-  $('[data-close]', dlg).onclick = () => dlg.close();
+  $$('[data-close]', dlg).forEach((b) => (b.onclick = () => dlg.close()));
   form.onsubmit = async (e) => {
     e.preventDefault();
-    const ok = await act(e.submitter, () => onSubmit(formData(form)));
+    const ok = await act(e.submitter, () => onSubmit(formData(form), form));
     if (ok) dlg.close();
   };
   dlg.showModal();
+  $('input:not([type=hidden]), select, textarea', form)?.focus();
 }
+
+const confirmBox = (title, text, onYes, { submit = 'Confirm', danger = true } = {}) =>
+  modal({ title, sub: esc(text), body: '', submit, danger, onSubmit: onYes });
 
 function getPosition() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('This device does not support location.'));
     navigator.geolocation.getCurrentPosition(
       (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
-      (e) =>
-        reject(new Error(e.code === 1 ? 'Location permission denied. Allow location access and try again.' : 'Could not get your location. Try again.')),
+      (e) => reject(new Error(e.code === 1 ? 'Location permission denied. Allow location access in your browser settings.' : 'Could not get your location. Try again.')),
       { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
     );
   });
 }
 
-const thisMonth = () => new Date().toISOString().slice(0, 7);
+const empty = (ico, text, extra = '') => `<div class="empty"><div class="ico">${icon(ico)}</div><div>${text}</div>${extra}</div>`;
+const skeleton = () =>
+  `<div class="dash"><div class="stack-col"><div class="skeleton" style="height:220px"></div><div class="skeleton" style="height:180px"></div></div>
+   <div class="skeleton" style="height:420px"></div></div>`;
 
-// ---------- App shell & routing ----------
+// ---------- State ----------
 
 let me = null;
+let company = 'Bahr Network';
+let cachedRules = { currency: 'EGP' };
+const rules = () => cachedRules;
 let pending = { leaves: 0, rewards: 0 };
-let clockTimer;
+let pageTimers = [];
+let notifItems = [];
 
-const EMPLOYEE_ROUTES = {
-  '': ['Check in', viewCheckIn],
-  leaves: ['Leave', viewMyLeaves],
-  rewards: ['Rewards', viewMyRewards],
-  history: ['History', viewMyHistory],
-  account: ['Account', viewAccount],
-};
-const OWNER_ROUTES = {
-  '': ['Today', viewOverview],
-  employees: ['Staff', viewEmployees],
-  points: ['Points', viewPoints],
-  leaves: ['Leave requests', viewLeaves],
-  rewards: ['Reward requests', viewRewards],
-  reports: ['Monthly report', viewReport],
-  settings: ['Settings', viewSettings],
-  account: ['Account', viewAccount],
-  staff: [null, viewStaffHistory],
-};
-
-function routes() {
-  return me.role === 'owner' ? OWNER_ROUTES : EMPLOYEE_ROUTES;
+function every(ms, fn) {
+  pageTimers.push(setInterval(() => document.visibilityState === 'visible' && fn(), ms));
 }
+
+// ---------- Theme ----------
+
+function isDark() {
+  const t = document.documentElement.dataset.theme;
+  return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+}
+function setTheme(t) {
+  if (t === 'system') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  store.set('theme', t);
+  paintThemeButtons();
+}
+const toggleTheme = () => setTheme(isDark() ? 'light' : 'dark');
+function paintThemeButtons() {
+  $$('[data-theme-btn]').forEach((b) => (b.innerHTML = icon(isDark() ? 'sun' : 'moon')));
+  $('#theme-btn').innerHTML = icon(isDark() ? 'sun' : 'moon');
+}
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintThemeButtons);
+
+// ---------- Routes ----------
+
+const EMPLOYEE_NAV = [
+  { group: 'Overview' },
+  { key: '', label: 'My Activity', icon: 'activity', view: () => viewEmployeeHome() },
+  { key: 'history', label: 'My History', icon: 'calendar', view: (p) => viewHistory(p) },
+  { group: 'Requests' },
+  { key: 'leaves', label: 'Leave', icon: 'flag', view: () => viewMyLeaves() },
+  { key: 'rewards', label: 'Rewards', icon: 'gift', view: () => viewMyRewards() },
+  { group: 'Team' },
+  { key: 'leaderboard', label: 'Leaderboard', icon: 'trophy', view: (p) => viewLeaderboard(p) },
+  { key: 'account', label: 'Account', icon: 'user', view: () => viewAccount(), hidden: true },
+];
+const OWNER_NAV = [
+  { group: 'Overview' },
+  { key: '', label: 'Dashboard', icon: 'home', view: (p) => viewOwnerDashboard(p) },
+  { key: 'reports', label: 'Monthly Report', icon: 'chart', view: (p) => viewReport(p) },
+  { group: 'People' },
+  { key: 'employees', label: 'Staff', icon: 'users', view: (p) => viewStaff(p) },
+  { key: 'points', label: 'Points', icon: 'star', view: () => viewPoints() },
+  { key: 'leaderboard', label: 'Leaderboard', icon: 'trophy', view: (p) => viewLeaderboard(p) },
+  { group: 'Requests' },
+  { key: 'leaves', label: 'Leave Requests', icon: 'flag', view: (p) => viewLeaveRequests(p), count: () => pending.leaves },
+  { key: 'rewards', label: 'Reward Requests', icon: 'gift', view: (p) => viewRewardRequests(p), count: () => pending.rewards },
+  { group: 'System' },
+  { key: 'settings', label: 'Settings', icon: 'settings', view: () => viewSettings() },
+  { key: 'account', label: 'Account', icon: 'user', view: () => viewAccount(), hidden: true },
+  { key: 'staff', label: 'Staff profile', icon: 'user', view: (p) => viewStaffProfile(p), hidden: true },
+];
+const BOTTOM_LABEL = { '': 'Home', history: 'History', leaves: 'Leave', rewards: 'Rewards', leaderboard: 'Ranking', employees: 'Staff', reports: 'Report' };
+const BOTTOM = {
+  employee: ['', 'history', 'leaves', 'rewards', 'leaderboard'],
+  owner: ['', 'employees', 'leaves', 'rewards', 'reports'],
+};
+
+const navItems = () => (me.role === 'owner' ? OWNER_NAV : EMPLOYEE_NAV);
+const routeFor = (key) => navItems().find((n) => n.view && n.key === key);
 
 function parseHash() {
   const [path, query = ''] = location.hash.replace(/^#\/?/, '').split('?');
   return { path, params: new URLSearchParams(query) };
 }
+const go = (hash) => (location.hash = hash);
 
-function renderNav(active) {
-  const nav = $('#nav');
-  nav.innerHTML = Object.entries(routes())
-    .filter(([, [label]]) => label)
-    .map(([key, [label]]) => {
-      const count = me.role === 'owner' ? pending[key] : 0;
-      return `<a href="#/${key}" class="${key === active ? 'active' : ''}">${esc(label)}${
-        count ? ` <span class="badge red">${count}</span>` : ''
-      }</a>`;
+// ---------- Shell ----------
+
+function renderShell(active = parseHash().path) {
+  $('#brand').innerHTML = `${logoMark(26)}${wordmark()}`;
+  $('#collapse-btn').innerHTML = icon('panel');
+  $('#menu-btn').innerHTML = icon('menu');
+  $('.search-ico').innerHTML = icon('search');
+  $('#bell-btn').innerHTML = `${icon('bell')}${notifCount() ? `<span class="badge-dot">${notifCount()}</span>` : ''}`;
+  paintThemeButtons();
+
+  $('#nav').innerHTML = navItems()
+    .filter((n) => !n.hidden)
+    .map((n) => {
+      if (n.group) return `<div class="nav-group">${esc(n.group)}</div>`;
+      const c = n.count ? n.count() : 0;
+      return `<a href="#/${n.key}" class="${n.key === active ? 'active' : ''}" data-key="${n.key}">
+        <span class="ico">${icon(n.icon)}</span><span class="label">${esc(n.label)}</span>
+        ${c ? `<span class="count">${c}</span><span class="dot-count"></span>` : ''}</a>`;
     })
     .join('');
-  nav.hidden = false;
+
+  $('#util-row').innerHTML = `
+    <button class="icon-btn sm" type="button" data-go="#/account" aria-label="Account">${icon('user')}</button>
+    <button class="icon-btn sm" type="button" data-palette aria-label="Search">${icon('search')}</button>
+    <button class="icon-btn sm" type="button" data-theme-btn aria-label="Toggle theme">${icon(isDark() ? 'sun' : 'moon')}</button>
+    <button class="icon-btn sm" type="button" data-logout aria-label="Log out">${icon('logout')}</button>`;
+  $('#user-card').innerHTML = `${avatar(me.name)}
+    <div class="who"><strong>${esc(me.name)}</strong><span>${me.role === 'owner' ? 'Owner' : esc(me.job_title || 'Staff')} · @${esc(me.username)}</span></div>
+    <button class="icon-btn xs ghost" type="button" data-go="#/account" aria-label="Account">${icon('more')}</button>`;
+
+  const bottom = BOTTOM[me.role].map((k) => routeFor(k));
+  $('#bottom-nav').className = 'bottom-nav on';
+  $('#bottom-nav').innerHTML = bottom
+    .map((n) => `<a href="#/${n.key}" class="${n.key === active ? 'active' : ''}">${icon(n.icon)}<span>${BOTTOM_LABEL[n.key]}</span></a>`)
+    .join('');
 }
+
+function renderOnline(rows) {
+  const el = $('#online');
+  if (!rows) return (el.innerHTML = '');
+  const present = rows.filter((r) => r.check_in_time);
+  el.innerHTML = present.length
+    ? `<span class="label">Checked in <span class="muted">(${present.length})</span></span>
+       <span class="stack">${present.slice(0, 4).map((r) => avatar(r.name, 'sm')).join('')}${present.length > 4 ? `<span class="avatar sm slate">+${present.length - 4}</span>` : ''}</span>`
+    : '';
+}
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-go],[data-palette],[data-theme-btn],[data-logout]');
+  if (!t) return;
+  if (t.dataset.go) go(t.dataset.go);
+  else if ('palette' in t.dataset) openPalette();
+  else if ('themeBtn' in t.dataset) toggleTheme();
+  else if ('logout' in t.dataset) logout();
+});
+$('#theme-btn').onclick = toggleTheme;
+$('#search-btn').onclick = () => openPalette();
+$('#collapse-btn').onclick = () => {
+  const c = document.documentElement.classList.toggle('sidebar-collapsed');
+  store.set('sidebar', c ? 'collapsed' : 'open');
+};
+$('#menu-btn').onclick = () => $('#shell').classList.add('menu-open');
+$('#scrim').onclick = () => $('#shell').classList.remove('menu-open');
+$('#bell-btn').onclick = (e) => {
+  e.stopPropagation();
+  toggleNotifications();
+};
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.pop-wrap')) $('#notif').hidden = true;
+});
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    if (me) openPalette();
+  } else if (e.key === '/' && me && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !$('#palette').open) {
+    e.preventDefault();
+    openPalette();
+  }
+});
+
+async function logout() {
+  await api('/logout', { method: 'POST', body: {} }).catch(() => {});
+  location.hash = '';
+  start();
+}
+
+// ---------- Router ----------
 
 async function route() {
   if (!me) return;
-  clearInterval(clockTimer);
+  pageTimers.forEach(clearInterval);
+  pageTimers = [];
+  $('#shell').classList.remove('menu-open');
+  $('#notif').hidden = true;
   const { path, params } = parseHash();
-  const entry = routes()[path] || routes()[''];
-  renderNav(routes()[path] ? path : '');
-  app.innerHTML = '<p class="muted">Loading…</p>';
+  const r = routeFor(path) || routeFor('');
+  renderShell(r.key);
+  const app = $('#app');
+  app.innerHTML = skeleton();
   try {
-    await entry[1](params);
+    await r.view(params);
+    app.classList.remove('page');
+    void app.offsetWidth;
+    app.classList.add('page');
   } catch (err) {
     if (err.status === 401) return start();
-    app.innerHTML = `<div class="notice red">${esc(err.message)}</div>`;
+    app.innerHTML = `<div class="card"><div class="notice pink">${icon('alert')}${esc(err.message)}</div></div>`;
   }
+  window.scrollTo({ top: 0 });
 }
+window.addEventListener('hashchange', route);
 
 async function start() {
   me = null;
-  $('#topbar').hidden = true;
-  $('#nav').hidden = true;
+  $('#shell').hidden = true;
+  $('#auth').hidden = true;
   try {
     const data = await api('/me');
     me = data.user;
-    $('#company-name').textContent = data.company_name;
-    $('#user-name').textContent = `${me.name} · ${me.role === 'owner' ? 'Owner' : me.job_title || 'Staff'}`;
-    document.title = `${data.company_name} — Attendance`;
-    $('#topbar').hidden = false;
-    if (me.role === 'owner') await refreshPending();
+    company = data.company_name;
+    document.title = `${company} — Attendance`;
+    $('#shell').hidden = false;
+    await refreshCounts();
     route();
   } catch {
     try {
       const setup = await api('/setup');
-      setup.needsSetup ? viewSetup(setup) : viewLogin(setup);
+      company = setup.company_name;
+      setup.needsSetup ? viewSetup() : viewLogin();
     } catch (err) {
-      app.innerHTML = `<div class="auth"><div class="notice red">${esc(err.message)}</div></div>`;
+      $('#auth').hidden = false;
+      $('#auth').innerHTML = `<div class="auth-form" style="grid-column:1/-1"><div class="card"><div class="notice pink">${icon('alert')}${esc(err.message)}</div></div></div>`;
     }
   }
 }
 
-async function refreshPending() {
+// Pending counts (owner) and recent decisions (employee) for badges + notifications.
+async function refreshCounts() {
   try {
-    const o = await api('/admin/overview');
-    pending = o.pending;
+    if (me.role === 'owner') {
+      const [o, leaves, rewards] = await Promise.all([
+        api('/admin/overview'),
+        api('/admin/leaves?status=pending'),
+        api('/admin/rewards?status=pending'),
+      ]);
+      pending = o.pending;
+      cachedRules = o.rules;
+      renderOnline(o.rows);
+      notifItems = [
+        ...leaves.map((l) => ({ at: l.created_at, who: l.user_name, text: `requested leave ${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}`, href: '#/leaves', ico: 'flag', unread: true })),
+        ...rewards.map((r) => ({ at: r.created_at, who: r.user_name, text: `requested ${money(r.amount, o.rules.currency)} via ${METHODS[r.method]}`, href: '#/rewards', ico: 'gift', unread: true })),
+      ].sort((a, b) => new Date(b.at) - new Date(a.at));
+    } else {
+      renderOnline(null);
+      const [leaves, rewards] = await Promise.all([api('/me/leaves'), api('/me/rewards')]);
+      const seen = Number(store.get('seen', 0));
+      notifItems = [
+        ...leaves.filter((l) => l.decided_at).map((l) => ({ at: l.decided_at, who: 'Leave', text: `${fmtDate(l.from_date)} → ${fmtDate(l.to_date)} was ${l.status}`, href: '#/leaves', ico: 'flag', status: l.status })),
+        ...rewards.filter((r) => r.decided_at).map((r) => ({ at: r.decided_at, who: 'Reward', text: `${r.points} points request was ${r.status === 'paid' ? 'paid 🎉' : r.status}`, href: '#/rewards', ico: 'gift', status: r.status })),
+      ]
+        .sort((a, b) => new Date(b.at) - new Date(a.at))
+        .slice(0, 15)
+        .map((n) => ({ ...n, unread: new Date(n.at).getTime() > seen }));
+    }
   } catch {
     /* non-critical */
   }
 }
+const notifCount = () => notifItems.filter((n) => n.unread).length;
 
-window.addEventListener('hashchange', route);
-$('#logout-btn').onclick = async () => {
-  await api('/logout', { method: 'POST', body: {} }).catch(() => {});
-  location.hash = '';
-  start();
-};
-
-// ---------- Auth views ----------
-
-function authShell(title, subtitle, inner) {
-  app.innerHTML = `<div class="auth">
-    <div class="logo"><img src="/icon.svg" width="64" height="64" alt="">
-      <h1>${esc(title)}</h1><p class="muted">${esc(subtitle)}</p></div>
-    <div class="card">${inner}</div></div>`;
+function toggleNotifications() {
+  const pop = $('#notif');
+  if (!pop.hidden) return (pop.hidden = true);
+  pop.innerHTML = `<div class="row between"><h3>Notifications</h3>${me.role === 'owner' ? '<span class="chip amber">Needs action</span>' : ''}</div>
+    <div class="list">${
+      notifItems.length
+        ? notifItems
+            .map(
+              (n) => `<a class="list-item" href="${n.href}" style="text-decoration:none">
+                <span class="avatar sm ${n.status ? (REQ[n.status] || [])[1] : 'slate'}">${icon(n.ico)}</span>
+                <div class="grow"><strong>${esc(n.who)}</strong><span>${esc(n.text)}</span></div>
+                <span class="tiny muted nowrap">${relTime(n.at)}</span></a>`,
+            )
+            .join('')
+        : empty('bell', "You're all caught up")
+    }</div>`;
+  pop.hidden = false;
+  if (me.role === 'employee') {
+    store.set('seen', Date.now());
+    notifItems = notifItems.map((n) => ({ ...n, unread: false }));
+    $('#bell-btn').innerHTML = icon('bell');
+  }
 }
 
-function viewLogin(info) {
-  authShell(info.company_name, 'Staff login', `
-    <form id="login">
-      <div class="field"><label for="u">Username</label><input id="u" name="username" autocomplete="username" required autofocus></div>
-      <div class="field"><label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password" required></div>
-      <button class="btn big" type="submit">Log in</button>
+// ---------- Command palette ----------
+
+let staffCache = null;
+async function openPalette() {
+  const dlg = $('#palette');
+  if (me.role === 'owner' && !staffCache) staffCache = await api('/admin/users').catch(() => []);
+  const items = [
+    ...navItems().filter((n) => n.view && !['staff'].includes(n.key)).map((n) => ({ label: n.label, sub: 'Page', ico: n.icon, run: () => go(`#/${n.key}`) })),
+    ...(me.role === 'employee' ? [{ label: 'Check in now', sub: 'Action', ico: 'pin', run: () => go('#/') }] : []),
+    ...(me.role === 'owner'
+      ? [
+          { label: 'Add employee', sub: 'Action', ico: 'plus', run: () => { go('#/employees'); setTimeout(addEmployeeModal, 300); } },
+          { label: "Export this month's report (CSV)", sub: 'Action', ico: 'download', run: () => (location.href = `/api/admin/report.csv?month=${thisMonth()}`) },
+          ...(staffCache || []).filter((u) => u.role === 'employee').map((u) => ({ label: u.name, sub: `${u.job_title || 'Staff'} · @${u.username}`, avatar: u.name, run: () => go(`#/staff?id=${u.id}`) })),
+        ]
+      : []),
+    { label: isDark() ? 'Switch to light mode' : 'Switch to dark mode', sub: 'Preference', ico: isDark() ? 'sun' : 'moon', run: toggleTheme },
+    { label: 'Log out', sub: 'Account', ico: 'logout', run: logout },
+  ];
+  dlg.innerHTML = `<div class="box"><div class="input-icon">${icon('search')}<input id="pal-q" placeholder="Search pages, staff, actions…" autocomplete="off"></div>
+    <div class="results" id="pal-r"></div><div class="hint"><span>↑↓ navigate</span><span>↵ open</span><span>esc close</span></div></div>`;
+  let sel = 0;
+  let shown = items;
+  const draw = () => {
+    $('#pal-r').innerHTML = shown.length
+      ? shown
+          .map(
+            (it, i) => `<div class="res ${i === sel ? 'sel' : ''}" data-i="${i}">
+              ${it.avatar ? avatar(it.avatar, 'sm') : `<span class="ico">${icon(it.ico)}</span>`}
+              <div class="grow"><strong>${esc(it.label)}</strong><br><span>${esc(it.sub)}</span></div></div>`,
+          )
+          .join('')
+      : empty('search', 'No results');
+    $('#pal-r .sel')?.scrollIntoView({ block: 'nearest' });
+  };
+  const runSel = () => {
+    const it = shown[sel];
+    if (!it) return;
+    dlg.close();
+    it.run();
+  };
+  const q = $('#pal-q');
+  q.oninput = () => {
+    const v = q.value.trim().toLowerCase();
+    shown = items.filter((it) => `${it.label} ${it.sub}`.toLowerCase().includes(v));
+    sel = 0;
+    draw();
+  };
+  q.onkeydown = (e) => {
+    if (e.key === 'ArrowDown') { sel = Math.min(sel + 1, shown.length - 1); draw(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { sel = Math.max(sel - 1, 0); draw(); e.preventDefault(); }
+    else if (e.key === 'Enter') runSel();
+  };
+  $('#pal-r').onclick = (e) => {
+    const r = e.target.closest('.res');
+    if (r) { sel = Number(r.dataset.i); runSel(); }
+  };
+  dlg.onclick = (e) => e.target === dlg && dlg.close();
+  draw();
+  dlg.showModal();
+  q.focus();
+}
+
+// ---------- Auth screens ----------
+
+function authShell(formHtml) {
+  $('#auth').hidden = false;
+  $('#auth').innerHTML = `
+    <section class="auth-hero">
+      <div class="row" style="gap:14px;color:#d5d9e0">${logoMark(40)}<span class="wm big"><b>BAHR</b><i>NETWORK</i></span></div>
+      <div>
+        <h1>Attendance that runs itself.</h1>
+        <p style="opacity:.75;margin-top:12px;max-width:42ch">GPS check-in, automatic points and deductions, leave and reward requests: one place for the whole team.</p>
+      </div>
+      <div class="feats">
+        <div class="feat lime">${icon('pin')}GPS check-in at the office</div>
+        <div class="feat teal">${icon('star')}Green points &amp; rewards</div>
+        <div class="feat pink">${icon('alert')}Automatic late &amp; absence rules</div>
+        <div class="feat sky">${icon('chart')}Monthly reports &amp; CSV export</div>
+      </div>
+    </section>
+    <section class="auth-form"><div class="card">${formHtml}</div></section>`;
+}
+
+function viewLogin() {
+  authShell(`
+    <h2>Welcome back</h2><p class="muted" style="margin:6px 0 22px">Sign in to ${esc(company)}</p>
+    <form id="login" class="grid">
+      <label class="f">Username<div class="input-icon">${icon('at')}<input name="username" autocomplete="username" required autofocus></div></label>
+      <label class="f">Password<div class="input-icon">${icon('key')}<input name="password" type="password" autocomplete="current-password" required></div></label>
+      <button class="btn block xl" type="submit" style="margin-top:6px">${icon('login')}Sign in</button>
     </form>`);
   $('#login').onsubmit = (e) => {
     e.preventDefault();
@@ -261,14 +622,15 @@ function viewLogin(info) {
   };
 }
 
-function viewSetup(info) {
-  authShell('Welcome 👋', 'First-time setup: create the owner account', `
-    <form id="setup">
-      <div class="field"><label>Company name</label><input name="company_name" value="${esc(info.company_name)}" required></div>
-      <div class="field"><label>Your name</label><input name="name" required></div>
-      <div class="field"><label>Username</label><input name="username" autocomplete="username" required></div>
-      <div class="field"><label>Password (6+ characters)</label><input name="password" type="password" minlength="6" autocomplete="new-password" required></div>
-      <button class="btn big" type="submit">Create owner account</button>
+function viewSetup() {
+  authShell(`
+    <h2>Let's set up 👋</h2><p class="muted" style="margin:6px 0 22px">Create the owner account. It takes 30 seconds.</p>
+    <form id="setup" class="grid">
+      <label class="f">Company name<input name="company_name" value="${esc(company)}" required></label>
+      <label class="f">Your name<input name="name" required></label>
+      <label class="f">Username<input name="username" autocomplete="username" pattern="[A-Za-z0-9_.@\\-]{3,40}" title="3+ letters/numbers, no spaces" required></label>
+      <label class="f">Password (6+ characters)<input name="password" type="password" minlength="6" autocomplete="new-password" required></label>
+      <button class="btn block xl" type="submit" style="margin-top:6px">Create owner account</button>
     </form>`);
   $('#setup').onsubmit = (e) => {
     e.preventDefault();
@@ -276,662 +638,1120 @@ function viewSetup(info) {
       await api('/setup', { method: 'POST', body: formData(e.target) });
       location.hash = '#/settings';
       await start();
-      toast('Set your office location to enable GPS check-in', 'success');
+      toast('Next: set your office location so staff can check in', 'success');
     });
   };
 }
 
-function viewAccount() {
-  app.innerHTML = `<div class="card" style="max-width:480px">
-    <h2>Change password</h2>
-    <form id="pw">
-      <div class="field"><label>Current password</label><input name="current" type="password" autocomplete="current-password" required></div>
-      <div class="field"><label>New password</label><input name="next" type="password" minlength="6" autocomplete="new-password" required></div>
-      <button class="btn" type="submit">Update password</button>
-    </form></div>`;
-  $('#pw').onsubmit = (e) => {
-    e.preventDefault();
-    act(e.submitter, async () => {
-      await api('/me/password', { method: 'POST', body: formData(e.target) });
-      e.target.reset();
-    }, 'Password updated');
+// ---------- Shared building blocks ----------
+
+function pageHead(title, sub, actions = '') {
+  return `<div class="page-head"><div><h1>${title}</h1>${sub ? `<p>${sub}</p>` : ''}</div>${actions ? `<div class="row wrap">${actions}</div>` : ''}</div>`;
+}
+
+function kpi(label, value, color, fill) {
+  return `<div class="kpi"><div class="label">${label}</div><div class="value num">${value}</div>
+    <div class="bar"><i style="width:${Math.max(4, Math.min(100, fill))}%;background:var(--${color}-bar, var(--${color}))"></i></div></div>`;
+}
+
+function tile(cls, title, value, sub = '', { href, arrow = true, big = false, attrs = '' } = {}) {
+  const tag = href ? 'a' : attrs ? 'button' : 'div';
+  return `<${tag} class="tile ${cls}" ${href ? `href="${href}"` : ''} ${attrs} ${tag === 'button' ? 'type="button"' : ''}>
+    <div class="t-title">${title}</div>${arrow && (href || attrs) ? `<span class="t-arrow">${icon('arrow')}</span>` : ''}
+    <div class="t-foot"><div class="t-sub">${sub}</div>${big ? `<div class="t-big num">${value}</div>` : `<div class="t-num num">${value}</div>`}</div></${tag}>`;
+}
+
+// Horizontal check-in timeline with a "now" marker.
+function timeTrack(r, nowTime) {
+  const start = toMin(r.early_start) - 60;
+  const end = toMin(r.close) + 60;
+  const span = end - start;
+  const seg = (a, b, cls, label) => {
+    const w = ((b - a) / span) * 100;
+    return w > 0 ? `<div class="${cls}" style="width:${w}%" title="${label}">${w > 9 ? label : ''}</div>` : '';
   };
+  const pts = [r.early_start, r.early_end, r.late_after, r.very_late_after, r.close];
+  const pos = (t) => ((toMin(t) - start) / span) * 100;
+  const now = nowTime ? toMin(nowTime) : null;
+  return `<div class="track">
+      ${seg(start, toMin(r.early_start), 'slate', 'Closed')}
+      ${seg(toMin(r.early_start), toMin(r.early_end), 'lime', 'Early +1')}
+      ${seg(toMin(r.early_end), toMin(r.late_after), 'teal', 'On time')}
+      ${seg(toMin(r.late_after), toMin(r.very_late_after), 'pink', 'Late')}
+      ${seg(toMin(r.very_late_after), toMin(r.close), 'pink', `Very late ×${r.very_late_reds}`)}
+      ${seg(toMin(r.close), end, 'dark', 'Closed')}
+      ${now != null && now > start && now < end ? `<span class="now" id="track-now" style="left:${((now - start) / span) * 100}%"></span>` : ''}
+    </div>
+    <div class="track-labels">${pts.map((t) => `<span style="left:${pos(t)}%">${fmtTime(t).replace(':00', '')}</span>`).join('')}</div>`;
 }
 
-// ---------- Shared pieces ----------
-
-function windowsHtml(r) {
-  return `<div class="windows">
-    <div class="window green"><span>Early · +1 green point</span><span class="num">${fmtTime(r.early_start)} – ${fmtTime(r.early_end)}</span></div>
-    <div class="window normal"><span>On time</span><span class="num">${fmtTime(r.early_end)} – ${fmtTime(r.late_after)}</span></div>
-    <div class="window red"><span>Late · 1 red penalty</span><span class="num">${fmtTime(r.late_after)} – ${fmtTime(r.very_late_after)}</span></div>
-    <div class="window red"><span>Very late · ${r.very_late_reds} red penalties</span><span class="num">${fmtTime(r.very_late_after)} – ${fmtTime(r.close)}</span></div>
-    <div class="window black"><span>Check-in closed · black absence</span><span class="num">after ${fmtTime(r.close)}</span></div>
-  </div>`;
+// Month calendar coloured by attendance status.
+function calendar(month, { attendance, points, leaves, workDays, startDate, today }) {
+  const first = toDate(`${month}-01`);
+  const daysIn = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  const att = new Map(attendance.map((a) => [a.work_date, a.status]));
+  const absent = new Set(points.filter((p) => p.source === 'absent' && p.kind === 'black').map((p) => p.work_date));
+  const onLeave = (d) => leaves.some((l) => l.status === 'approved' && d >= l.from_date && d <= l.to_date);
+  let html = DAYS.map((d) => `<div class="dow">${d.slice(0, 2)}</div>`).join('');
+  html += '<div></div>'.repeat(first.getUTCDay());
+  for (let i = 1; i <= daysIn; i++) {
+    const d = `${month}-${String(i).padStart(2, '0')}`;
+    const wd = workDays.includes(toDate(d).getUTCDay());
+    let cls = '';
+    let title = '';
+    if (att.has(d)) { cls = STATUS[att.get(d)][1]; title = STATUS[att.get(d)][0]; }
+    else if (onLeave(d)) { cls = 'amber'; title = 'On leave'; }
+    else if (absent.has(d)) { cls = 'dark'; title = 'Absent'; }
+    else if (d > today) { cls = 'future'; }
+    else if (!wd || (startDate && d < startDate)) { cls = 'off'; title = 'Day off'; }
+    html += `<div class="day ${cls} ${d === today ? 'today' : ''}" title="${fmtDate(d)}${title ? ` · ${title}` : ''}">${i}</div>`;
+  }
+  return `<div class="cal">${html}</div>
+    <div class="legend mt"><span><i class="lime"></i>Early</span><span><i class="teal"></i>On time</span><span><i class="pink"></i>Late</span>
+    <span><i class="dark"></i>Absent</span><span><i class="amber"></i>Leave</span></div>`;
 }
 
-function statCards(green, red, black, labels = ['Green points', 'Red penalties', 'Black absences']) {
-  return `<div class="grid grid-3">
-    <div class="stat green"><div class="label"><span class="dot green"></span>${labels[0]}</div><div class="value num">${green}</div></div>
-    <div class="stat red"><div class="label"><span class="dot red"></span>${labels[1]}</div><div class="value num">${red}</div></div>
-    <div class="stat black"><div class="label"><span class="dot black"></span>${labels[2]}</div><div class="value num">${black}</div></div>
-  </div>`;
-}
-
-function historyTables(h) {
-  return `
-    <div class="card"><h2>Attendance</h2>${
+function historyLists(h) {
+  return `<div class="grid g2 mt">
+    <div class="card"><div class="card-head"><h2>Attendance</h2><span class="chip">${h.attendance.length} days</span></div>${
       h.attendance.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Check in</th><th>Check out</th><th>Status</th><th>Distance</th></tr></thead><tbody>${h.attendance
+        ? `<div class="list">${h.attendance
             .map(
-              (a) => `<tr><td>${fmtDate(a.work_date)}</td><td class="num">${fmtTime(a.check_in_time)}</td>
-                <td class="num">${fmtTime(a.check_out_time)}</td><td>${badge(STATUS, a.status)}</td>
-                <td class="num">${a.distance_m == null ? 'manual' : `${a.distance_m} m`}</td></tr>`,
+              (a) => `<div class="list-item"><span class="avatar sm ${STATUS[a.status][1]}">${icon('clock')}</span>
+                <div class="grow"><strong>${fmtDate(a.work_date)}</strong><span>In ${fmtTime(a.check_in_time)} · Out ${fmtTime(a.check_out_time)} · ${a.distance_m == null ? 'Manual' : `${Math.round(a.distance_m)} m`}</span></div>
+                ${chip(STATUS, a.status)}</div>`,
             )
-            .join('')}</tbody></table></div>`
-        : '<p class="empty">No attendance this month.</p>'
+            .join('')}</div>`
+        : empty('calendar', 'No attendance this month')
     }</div>
-    <div class="card"><h2>Points log</h2>${
+    <div class="card"><div class="card-head"><h2>Points log</h2></div>${
       h.points.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Points</th><th>Source</th><th>Reason</th></tr></thead><tbody>${h.points
+        ? `<div class="list">${h.points
             .map(
-              (p) => `<tr><td>${fmtDate(p.work_date)}</td><td>${kindBadge(p.kind, p.delta)}</td>
-                <td>${esc(SOURCE[p.source] || p.source)}</td><td class="wrap">${esc(p.reason)}</td></tr>`,
+              (p) => `<div class="list-item"><span class="avatar sm ${KIND[p.kind][1]}">${icon(p.kind === 'green' ? 'star' : p.kind === 'red' ? 'alert' : 'ban')}</span>
+                <div class="grow"><strong>${esc(SOURCE[p.source] || p.source)}</strong><span>${fmtDate(p.work_date)}${p.reason ? ` · ${esc(p.reason)}` : ''}</span></div>
+                ${pointsChip(p.kind, p.delta)}</div>`,
             )
-            .join('')}</tbody></table></div>`
-        : '<p class="empty">No points this month.</p>'
-    }</div>`;
+            .join('')}</div>`
+        : empty('star', 'No points this month')
+    }</div></div>`;
 }
 
-// ---------- Employee views ----------
+function monthInput(month, hashBase) {
+  setTimeout(() => {
+    const el = $('#month');
+    if (el) el.onchange = (e) => go(`${hashBase}${hashBase.includes('?') ? '&' : '?'}month=${e.target.value}`);
+  });
+  return `<input type="month" id="month" value="${month}" style="width:180px">`;
+}
 
-async function viewCheckIn() {
-  const d = await api('/me/dashboard');
+// ---------- Employee: home ----------
+
+async function viewEmployeeHome() {
+  const [d, h, leaves, lb] = await Promise.all([
+    api('/me/dashboard'),
+    api(`/me/history?month=${thisMonth()}`),
+    api('/me/leaves'),
+    api('/leaderboard').catch(() => ({ rows: [] })),
+  ]);
+  cachedRules = d.rules;
   const r = d.rules;
   const a = d.attendance;
   const m = d.balances.month;
+  const days = Math.max(1, daysBetween(me.created_at || me.start_date, d.now.date) + 1);
+  const toReward = Math.max(0, r.min_reward_points - d.balances.green);
+  const myRank = lb.rows.findIndex((x) => x.user_id === me.id) + 1;
 
-  let statusHtml;
+  let checkBlock;
   if (a) {
-    const earned = a.status === 'early' ? ' — you earned 1 green point 🎉' : a.status.includes('late') ? ' — red penalty recorded' : '';
-    statusHtml = `<div class="notice ${a.status === 'early' ? 'green' : a.status.includes('late') ? 'red' : ''}">
-        Checked in at <span class="num">${fmtTime(a.check_in_time)}</span> · ${STATUS[a.status][0]}${earned}
-        ${a.check_out_time ? `<br>Checked out at <span class="num">${fmtTime(a.check_out_time)}</span>` : ''}
-      </div>
-      ${a.check_out_time ? '' : '<button class="btn big light" id="checkout">Check out</button>'}`;
+    const st = STATUS[a.status];
+    const msg = a.status === 'early' ? 'You earned +1 green point 🎉' : a.status.includes('late') ? `${a.status === 'late' ? 1 : r.very_late_reds} red penalty recorded` : 'Right on time. Nice!';
+    checkBlock = `<div class="status-banner ${st[1]}"><span class="ico">${icon('check')}</span>
+        <div><strong>Checked in at ${fmtTime(a.check_in_time)} · ${st[0]}</strong><div class="small">${msg}${a.check_out_time ? ` · Checked out ${fmtTime(a.check_out_time)}` : ''}</div></div></div>
+      ${a.check_out_time ? '' : `<button class="btn light block mt" id="checkout" style="height:52px">${icon('logout')}Check out</button>`}`;
   } else {
-    const notes = [];
-    if (!d.work_day) notes.push('<div class="notice amber">Today is not a work day.</div>');
-    if (d.on_leave) notes.push('<div class="notice amber">You are on approved leave today.</div>');
     const gated = d.work_day && d.check_in_window !== 'open';
-    if (gated && d.check_in_window === 'closed') notes.push(`<div class="notice red">Check-in closed at ${fmtTime(r.close)}.</div>`);
-    if (gated && d.check_in_window === 'not_open') notes.push(`<div class="notice">Check-in opens at ${fmtTime(r.early_start)}.</div>`);
-    statusHtml = gated ? notes.join('') : `${notes.join('')}<button class="btn big green" id="checkin">📍 Check in</button>
-      <p class="muted small" style="margin-top:8px">Your location is checked when you check in. You must be within ${r.radius_m} m of the office.</p>`;
+    const notes = [];
+    if (!d.work_day) notes.push(`<div class="notice slate">${icon('calendar')}Today is not a work day. Enjoy!</div>`);
+    if (d.on_leave) notes.push(`<div class="notice amber">${icon('flag')}You're on approved leave today.</div>`);
+    if (gated && d.check_in_window === 'closed') notes.push(`<div class="notice dark">${icon('ban')}Check-in closed at ${fmtTime(r.close)}.</div>`);
+    if (gated && d.check_in_window === 'not_open') notes.push(`<div class="notice sky">${icon('clock')}Check-in opens at ${fmtTime(r.early_start)}.</div>`);
+    checkBlock = `<div class="grid" style="gap:10px">${notes.join('')}</div>${
+      gated ? '' : `<button class="checkin-btn ${notes.length ? 'mt' : ''}" id="checkin">${icon('pin')}<span>Check in</span></button>
+        <p class="muted small" style="margin-top:10px;text-align:center">You must be within ${r.radius_m} m of the office. Location is checked once, when you tap.</p>`
+    }`;
   }
 
-  const canRedeem = d.balances.green >= 1 && m.red >= 1;
-  app.innerHTML = `
-    <div class="grid grid-2">
-      <div class="card">
-        <div class="card-head"><h2>Staff check-in</h2><span class="muted small">${fmtDate(d.now.date)}</span></div>
-        <div class="clock num" id="clock">${fmtTime(d.now.time)}</div>
-        <p class="muted small">Server time (${esc(r.company_name)})</p>
-        ${statusHtml}
+  $('#app').innerHTML = `
+    ${pageHead(`${greeting()}, ${esc(me.name.split(' ')[0])}`, fmtLong(d.now.date), `
+      ${d.streak ? `<span class="chip pink">${icon('flame')}${d.streak}-day streak</span>` : ''}
+      ${myRank ? `<a class="chip lime" href="#/leaderboard" style="text-decoration:none">${icon('trophy')}#${myRank} this month</a>` : ''}`)}
+    <div class="dash">
+      <div class="stack-col">
+        <div class="card">
+          <div class="profile">
+            <div class="photo ${hue(me.name)}">${esc(initials(me.name))}</div>
+            <div class="meta">
+              <div class="row between"><div><h2>${esc(me.name)}</h2><p class="muted small">${esc(me.job_title || 'Team member')} · ${days} day${days === 1 ? '' : 's'} at ${esc(company)}</p></div>
+                <button class="icon-btn sm" data-go="#/account" aria-label="Edit account">${icon('pen')}</button></div>
+              <div class="info">
+                <span>${icon('at')}@${esc(me.username)}</span>
+                <span>${icon('phone')}${esc(me.phone || '—')}</span>
+                <span>${icon('briefcase')}${esc(company)}</span>
+                <span>${icon('clock')}${fmtTime(r.early_end)} – ${fmtTime(r.late_after)}</span>
+              </div>
+            </div>
+          </div>
+          <div class="kpis">
+            ${kpi('Attendance this month', `${d.month_stats.rate}%`, 'teal', d.month_stats.rate)}
+            ${kpi('Green balance', d.balances.green, 'lime', pct(d.balances.green, r.min_reward_points))}
+            ${kpi('On-time streak', `${d.streak} day${d.streak === 1 ? '' : 's'}`, 'pink', Math.min(100, d.streak * 10))}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Staff check-in</h2><span class="chip">${icon('clock')}Server time</span></div>
+          <div class="row between wrap" style="align-items:flex-end;margin-bottom:6px">
+            <div class="clock num" id="clock">${fmtTime(d.now.time)}</div>
+            <div class="muted small" style="text-align:right">${fmtDate(d.now.date)}<br>${esc(r.company_name)}</div>
+          </div>
+          ${d.work_day ? timeTrack(r, d.now.time) : ''}
+          <div class="mt">${checkBlock}</div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>My points</h2><span class="chip">${fmtMonth(d.now.date.slice(0, 7))}</span></div>
+          <div class="grid g3">
+            ${tile('lime', 'Green points', d.balances.green, `+${m.green} this month`, { big: true, href: '#/rewards' })}
+            ${tile('pink', 'Red penalties', m.red, `${money(d.deductions.red * d.deductions.red_value)}`, { big: true, href: '#/history' })}
+            ${tile('dark', 'Black absences', m.black, `${money(d.deductions.black * d.deductions.black_value)}`, { big: true, href: '#/history' })}
+          </div>
+          ${
+            d.balances.green >= 1 && m.red >= 1
+              ? `<div class="notice lime mt" style="justify-content:space-between;flex-wrap:wrap">
+                  <span class="row">${icon('refresh')}Swap 1 green point to remove 1 red penalty</span>
+                  <button class="btn sm" id="redeem">Use 1 green point</button></div>`
+              : ''
+          }
+          <div class="row between mt" style="padding-top:14px;border-top:1px solid var(--line)">
+            <span class="muted">Deductions this month</span><strong class="num" style="font-size:1.2rem">${money(d.deductions.total)}</strong>
+          </div>
+        </div>
       </div>
-      <div class="card"><h2>Check-in times</h2>${windowsHtml(r)}</div>
-    </div>
-    <div class="card">
-      <div class="card-head"><h2>My points</h2><span class="muted small">this month</span></div>
-      ${statCards(d.balances.green, m.red, m.black, ['Green points (balance)', 'Red penalties', 'Black absences'])}
-      ${
-        canRedeem
-          ? `<div class="notice green" style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-               <span>Use 1 green point to remove 1 red penalty</span>
-               <button class="btn small green" id="redeem">Use 1 green point</button></div>`
-          : ''
-      }
-    </div>
-    <div class="card">
-      <h2>Monthly attendance deductions</h2>
-      <div class="deduction-line"><span><span class="dot red"></span> Red: <span class="num">${d.deductions.red} × ${money(d.deductions.red_value, r.currency)}</span></span><span class="num">${money(d.deductions.red * d.deductions.red_value, r.currency)}</span></div>
-      <div class="deduction-line"><span><span class="dot black"></span> Black: <span class="num">${d.deductions.black} × ${money(d.deductions.black_value, r.currency)}</span></span><span class="num">${money(d.deductions.black * d.deductions.black_value, r.currency)}</span></div>
-      <div class="deduction-line"><span>Total deduction</span><span class="num">${money(d.deductions.total, r.currency)}</span></div>
+
+      <div class="stack-col">
+        <div class="card">
+          <div class="card-head"><h2>My month</h2><a class="btn sm light" href="#/history">Details</a></div>
+          ${calendar(d.now.date.slice(0, 7), { attendance: h.attendance, points: h.points, leaves, workDays: r.work_days, startDate: me.start_date, today: d.now.date })}
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Next reward</h2></div>
+          <div class="row" style="gap:18px">
+            <div class="ring" style="--p:${pct(Math.min(d.balances.green, r.min_reward_points), r.min_reward_points)}"><div><b class="num">${d.balances.green}</b><small>of ${r.min_reward_points}</small></div></div>
+            <div><p class="strong">${toReward ? `${toReward} more green point${toReward === 1 ? '' : 's'} to unlock a reward` : 'You can request a reward now! 🎉'}</p>
+              <p class="muted small" style="margin:6px 0 12px">1 point = ${money(r.green_value)}. Check in early to earn more.</p>
+              <a class="btn sm ${toReward ? 'light' : 'lime'}" href="#/rewards">${icon('gift')}Rewards</a></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Top this month</h2><a class="btn sm light" href="#/leaderboard">All</a></div>
+          ${miniLeaderboard(lb.rows)}
+        </div>
+      </div>
     </div>`;
 
-  // Keep the clock ticking from server time.
+  // Live clock from server time.
   const base = Date.now();
-  const [h, mi] = d.now.time.split(':').map(Number);
-  const startSec = h * 3600 + mi * 60 + d.now.seconds;
-  clockTimer = setInterval(() => {
+  const [hh, mm] = d.now.time.split(':').map(Number);
+  const startSec = hh * 3600 + mm * 60 + d.now.seconds;
+  every(1000, () => {
     const s = Math.floor(startSec + (Date.now() - base) / 1000) % 86400;
     const el = $('#clock');
     if (el) el.textContent = fmtTime(`${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}`);
-  }, 1000);
+  });
 
   const checkin = $('#checkin');
   if (checkin) {
     checkin.onclick = () =>
       act(checkin, async () => {
-        checkin.textContent = 'Getting your location…';
+        const label = $('span', checkin);
+        label.textContent = 'Getting your location…';
         try {
           const pos = await getPosition();
-          checkin.textContent = 'Checking in…';
+          label.textContent = 'Checking in…';
           const res = await api('/me/check-in', { method: 'POST', body: pos });
-          toast(res.green ? 'Checked in early! +1 green point' : res.red ? `Checked in late: ${res.red} red penalty` : 'Checked in ✓', res.red ? 'error' : 'success');
+          toast(res.green ? 'Checked in early! +1 green point 🎉' : res.red ? `Checked in late: ${res.red} red penalty` : 'Checked in ✓', res.red ? 'error' : 'success');
           route();
         } finally {
-          checkin.textContent = '📍 Check in';
+          label.textContent = 'Check in';
         }
       });
   }
   const checkout = $('#checkout');
-  if (checkout) {
-    checkout.onclick = () =>
-      act(checkout, async () => {
-        await api('/me/check-out', { method: 'POST', body: {} });
-        route();
-      }, 'Checked out');
-  }
+  if (checkout) checkout.onclick = () => act(checkout, async () => { await api('/me/check-out', { method: 'POST', body: {} }); route(); }, 'Checked out. See you tomorrow!');
   const redeem = $('#redeem');
-  if (redeem) {
-    redeem.onclick = () =>
-      act(redeem, async () => {
-        await api('/me/redeem', { method: 'POST', body: {} });
-        route();
-      }, '1 red penalty removed');
-  }
+  if (redeem) redeem.onclick = () => act(redeem, async () => { await api('/me/redeem', { method: 'POST', body: {} }); route(); }, '1 red penalty removed');
 }
+
+function miniLeaderboard(rows) {
+  if (!rows.length) return empty('trophy', 'No ranking yet');
+  return `<div class="list">${rows
+    .slice(0, 5)
+    .map(
+      (x, i) => `<div class="list-item" ${x.user_id === me.id ? 'style="background:var(--sunken);border-radius:14px;padding-inline:8px"' : ''}>
+        <span class="rank">${['🥇', '🥈', '🥉'][i] || i + 1}</span>${avatar(x.name, 'sm')}
+        <div class="grow"><strong>${esc(x.name)}${x.user_id === me.id ? ' (you)' : ''}</strong><span>${esc(x.job_title || 'Staff')}</span></div>
+        <span class="chip lime num">${x.green}</span></div>`,
+    )
+    .join('')}</div>`;
+}
+
+// ---------- Employee: history ----------
+
+async function viewHistory(params, userId = null) {
+  const month = params.get('month') || thisMonth();
+  const base = userId ? `/admin/users/${userId}/history` : '/me/history';
+  const [h, leaves] = await Promise.all([
+    api(`${base}?month=${month}`),
+    userId ? api('/admin/leaves?status=approved').then((l) => l.filter((x) => x.user_id === userId)) : api('/me/leaves'),
+  ]);
+  return { h, leaves, month };
+}
+
+async function viewHistoryPage(params) {
+  const { h, leaves, month } = await viewHistory(params);
+  const d = await api('/me/dashboard');
+  cachedRules = d.rules;
+  $('#app').innerHTML = `
+    ${pageHead('My history', fmtMonth(month), monthInput(month, '#/history'))}
+    <div class="dash">
+      <div class="stack-col">
+        <div class="card"><div class="card-head"><h2>Summary</h2></div>
+          <div class="grid g4">
+            ${tile('teal', 'Days present', h.attendance.length, 'this month', { big: true, arrow: false })}
+            ${tile('lime', 'Green earned', h.balances.month.green, `balance ${h.balances.green}`, { big: true, arrow: false })}
+            ${tile('pink', 'Red penalties', h.balances.month.red, money(Math.max(0, h.balances.month.red) * d.rules.red_value), { big: true, arrow: false })}
+            ${tile('dark', 'Absences', h.balances.month.black, money(Math.max(0, h.balances.month.black) * d.rules.black_value), { big: true, arrow: false })}
+          </div>
+        </div>
+      </div>
+      <div class="card"><div class="card-head"><h2>Calendar</h2></div>
+        ${calendar(month, { attendance: h.attendance, points: h.points, leaves, workDays: d.rules.work_days, startDate: me.start_date, today: d.now.date })}</div>
+    </div>
+    ${historyLists(h)}`;
+}
+EMPLOYEE_NAV.find((n) => n.key === 'history').view = viewHistoryPage;
+
+// ---------- Employee: leave ----------
 
 async function viewMyLeaves() {
   const list = await api('/me/leaves');
-  const today = new Date().toISOString().slice(0, 10);
-  app.innerHTML = `
-    <div class="card">
-      <h2>Request leave 🏖️</h2>
-      <p class="muted small">Approved leave days don't count as absences, so you won't get a black point.</p>
-      <form id="leave">
-        <div class="form-grid">
-          <div class="field"><label>From</label><input type="date" name="from_date" min="${today}" required></div>
-          <div class="field"><label>To</label><input type="date" name="to_date" min="${today}" required></div>
-        </div>
-        <div class="field" style="margin-top:12px"><label>Reason (optional)</label><textarea name="reason" maxlength="500"></textarea></div>
-        <button class="btn" type="submit">Send leave request</button>
-      </form>
-    </div>
-    <div class="card"><h2>My leave requests</h2>${
-      list.length
-        ? `<div class="table-wrap"><table><thead><tr><th>From</th><th>To</th><th>Reason</th><th>Status</th><th></th></tr></thead><tbody>${list
-            .map(
-              (l) => `<tr><td>${fmtDate(l.from_date)}</td><td>${fmtDate(l.to_date)}</td><td class="wrap">${esc(l.reason) || '—'}</td>
-                <td>${badge(REQ, l.status)}</td>
-                <td>${l.status === 'pending' ? `<button class="btn small light" data-cancel="${l.id}">Cancel</button>` : ''}</td></tr>`,
-            )
-            .join('')}</tbody></table></div>`
-        : '<p class="empty">No leave requests yet.</p>'
-    }</div>`;
-  $('#leave').onsubmit = (e) => {
-    e.preventDefault();
-    act(e.submitter, async () => {
-      await api('/me/leaves', { method: 'POST', body: formData(e.target) });
-      route();
-    }, 'Leave request sent');
+  const today = localISODate();
+  $('#app').innerHTML = `
+    ${pageHead('Leave', 'Approved leave days never count as absences.')}
+    <div class="dash">
+      <div class="card">
+        <div class="card-head"><h2>Request leave 🏖️</h2></div>
+        <form id="leave" class="form-grid">
+          <label class="f">From<input type="date" name="from_date" min="${today}" value="${today}" required></label>
+          <label class="f">To<input type="date" name="to_date" min="${today}" value="${today}" required></label>
+          <div class="full chips" id="quick">
+            <button type="button" class="chip" data-days="1">1 day</button><button type="button" class="chip" data-days="2">2 days</button>
+            <button type="button" class="chip" data-days="3">3 days</button><button type="button" class="chip" data-days="7">1 week</button>
+          </div>
+          <label class="f full">Reason (optional)<textarea name="reason" maxlength="500" placeholder="e.g. Sick leave, family event…"></textarea></label>
+          <div class="full row between"><span class="muted small" id="leave-len"></span><button class="btn" type="submit">${icon('flag')}Send request</button></div>
+        </form>
+      </div>
+      <div class="card"><div class="card-head"><h2>My requests</h2><span class="chip">${list.length}</span></div>${
+        list.length
+          ? `<div class="list">${list
+              .map(
+                (l) => `<div class="list-item"><span class="avatar sm ${REQ[l.status][1]}">${icon('flag')}</span>
+                  <div class="grow"><strong>${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}</strong><span>${daysBetween(l.from_date, l.to_date) + 1} day(s)${l.reason ? ` · ${esc(l.reason)}` : ''}</span></div>
+                  ${chip(REQ, l.status)}${l.status === 'pending' ? `<button class="icon-btn xs" data-cancel="${l.id}" aria-label="Cancel request">${icon('x')}</button>` : ''}</div>`,
+              )
+              .join('')}</div>`
+          : empty('flag', 'No leave requests yet')
+      }</div>
+    </div>`;
+  const form = $('#leave');
+  const len = () => {
+    const n = form.from_date.value && form.to_date.value ? daysBetween(form.from_date.value, form.to_date.value) + 1 : 0;
+    $('#leave-len').textContent = n > 0 ? `${n} day${n === 1 ? '' : 's'}` : 'End date must be after start';
   };
-  app.querySelectorAll('[data-cancel]').forEach((b) => {
-    b.onclick = () => act(b, async () => {
-      await api(`/me/leaves/${b.dataset.cancel}/cancel`, { method: 'POST', body: {} });
-      route();
-    }, 'Request cancelled');
-  });
+  form.oninput = len;
+  len();
+  $$('#quick [data-days]').forEach((b) => (b.onclick = () => {
+    const from = form.from_date.value || today;
+    const end = toDate(from);
+    end.setUTCDate(end.getUTCDate() + Number(b.dataset.days) - 1);
+    form.to_date.value = end.toISOString().slice(0, 10);
+    len();
+  }));
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    act(e.submitter, async () => { await api('/me/leaves', { method: 'POST', body: formData(form) }); route(); }, 'Leave request sent');
+  };
+  $$('[data-cancel]').forEach((b) => (b.onclick = () => act(b, async () => {
+    await api(`/me/leaves/${b.dataset.cancel}/cancel`, { method: 'POST', body: {} });
+    route();
+  }, 'Request cancelled')));
 }
+
+// ---------- Employee: rewards ----------
 
 async function viewMyRewards() {
   const [d, list] = await Promise.all([api('/me/dashboard'), api('/me/rewards')]);
+  cachedRules = d.rules;
   const r = d.rules;
-  app.innerHTML = `
-    <div class="grid grid-2">
-      <div class="card">
-        <h2>Green points</h2>
-        <div class="stat green"><div class="label"><span class="dot green"></span>Available balance</div><div class="value num">${d.balances.green}</div></div>
-        <p class="muted" style="margin-top:12px">1 green point = <strong class="num">${money(r.green_value, r.currency)}</strong>.
-          Minimum request: <strong class="num">${r.min_reward_points}</strong> points.</p>
-        <p class="muted small">You earn a green point every time you check in early.</p>
-      </div>
-      <div class="card">
-        <h2>Send reward request 🎁</h2>
-        <form id="reward">
-          <div class="field"><label>Points</label><input type="number" name="points" min="${r.min_reward_points}" max="${Math.max(d.balances.green, r.min_reward_points)}" value="${Math.max(Math.min(d.balances.green, 1e6), r.min_reward_points)}" required></div>
-          <div class="field"><label>Payout method</label>
-            <div class="checks">${Object.entries(METHODS)
-              .map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 0 ? 'checked' : ''}> ${v}</label>`)
+  const bal = d.balances.green;
+  const can = bal >= r.min_reward_points;
+  const lastNumber = list.find((x) => x.payout_number)?.payout_number || store.get('payout', '');
+  $('#app').innerHTML = `
+    ${pageHead('Rewards', 'Turn your green points into money.')}
+    <div class="dash">
+      <div class="stack-col">
+        <div class="card">
+          <div class="card-head"><h2>Send reward request 🎁</h2></div>
+          <form id="reward" class="grid" style="gap:16px">
+            <label class="f">Points
+              <div class="row"><button type="button" class="icon-btn sm" data-step="-1">${icon('minus')}</button>
+              <input type="number" name="points" min="${r.min_reward_points}" max="${Math.max(bal, r.min_reward_points)}" value="${Math.max(r.min_reward_points, bal)}" required style="text-align:center;font-weight:800;font-size:1.1rem">
+              <button type="button" class="icon-btn sm" data-step="1">${icon('plus')}</button>
+              <button type="button" class="btn sm light" data-max>Max</button></div></label>
+            <div class="f"><span>Payout method</span><div class="choice">${Object.entries(METHODS)
+              .map(([k, v], i) => `<label><input type="radio" name="method" value="${k}" ${i === 0 ? 'checked' : ''}>${icon(k === 'cash' ? 'wallet' : 'phone')}${v}</label>`)
               .join('')}</div></div>
-          <div class="field" id="number-field"><label>Mobile / payout number</label><input name="payout_number" inputmode="tel" placeholder="01xxxxxxxxx or name@instapay"></div>
-          <p class="notice" id="amount"></p>
-          <button class="btn" type="submit" ${d.balances.green < r.min_reward_points ? 'disabled' : ''}>Send reward request</button>
-          ${d.balances.green < r.min_reward_points ? `<p class="muted small" style="margin-top:8px">You need at least ${r.min_reward_points} green points.</p>` : ''}
-        </form>
+            <label class="f" id="number-field">Mobile / InstaPay address<div class="input-icon">${icon('phone')}<input name="payout_number" inputmode="tel" value="${esc(lastNumber)}" placeholder="01xxxxxxxxx or name@instapay"></div></label>
+            <div class="tile lime" style="min-height:auto"><div class="row between"><span class="strong">You'll receive</span><span class="t-big num" id="amount"></span></div></div>
+            <button class="btn xl block" type="submit" ${can ? '' : 'disabled'}>${icon('gift')}Send reward request</button>
+            ${can ? '' : `<p class="muted small" style="text-align:center">You need at least ${r.min_reward_points} green points (you have ${bal}).</p>`}
+          </form>
+        </div>
       </div>
-    </div>
-    <div class="card"><h2>My reward requests</h2>${
-      list.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Points</th><th>Amount</th><th>Method</th><th>Status</th><th></th></tr></thead><tbody>${list
-            .map(
-              (x) => `<tr><td>${fmtDate(x.created_at)}</td><td class="num">${x.points}</td><td class="num">${money(x.amount, r.currency)}</td>
-                <td>${METHODS[x.method]} <span class="muted num">${esc(x.payout_number || '')}</span></td><td>${badge(REQ, x.status)}</td>
-                <td>${x.status === 'pending' ? `<button class="btn small light" data-cancel="${x.id}">Cancel</button>` : ''}</td></tr>`,
-            )
-            .join('')}</tbody></table></div>`
-        : '<p class="empty">No reward requests yet.</p>'
-    }</div>`;
+      <div class="stack-col">
+        <div class="card"><div class="row" style="gap:18px">
+          <div class="ring" style="--p:${pct(Math.min(bal, r.min_reward_points), r.min_reward_points)}"><div><b class="num">${bal}</b><small>points</small></div></div>
+          <div><h2 style="font-size:1.1rem">Green balance</h2><p class="muted small" style="margin-top:6px">1 point = <strong>${money(r.green_value)}</strong><br>Minimum ${r.min_reward_points} points per request.</p></div>
+        </div></div>
+        <div class="card"><div class="card-head"><h2>My requests</h2></div>${
+          list.length
+            ? `<div class="list">${list
+                .map(
+                  (x) => `<div class="list-item"><span class="avatar sm ${REQ[x.status][1]}">${icon('gift')}</span>
+                    <div class="grow"><strong>${money(x.amount)} · ${x.points} pts</strong><span>${METHODS[x.method]} ${esc(x.payout_number || '')} · ${relTime(x.created_at)}</span></div>
+                    ${chip(REQ, x.status)}${x.status === 'pending' ? `<button class="icon-btn xs" data-cancel="${x.id}" aria-label="Cancel">${icon('x')}</button>` : ''}</div>`,
+                )
+                .join('')}</div>`
+            : empty('gift', 'No reward requests yet')
+        }</div>
+      </div>
+    </div>`;
   const form = $('#reward');
   const update = () => {
     const pts = Number(form.points.value) || 0;
-    $('#amount').innerHTML = `<span class="num">${pts}</span> points ≈ <strong class="num">${money(pts * r.green_value, r.currency)}</strong>`;
+    $('#amount').textContent = money(pts * r.green_value);
     $('#number-field').hidden = form.method.value === 'cash';
   };
   form.oninput = update;
+  form.onchange = update;
+  $$('[data-step]', form).forEach((b) => (b.onclick = () => {
+    form.points.value = Math.max(r.min_reward_points, Math.min(bal || r.min_reward_points, Number(form.points.value) + Number(b.dataset.step)));
+    update();
+  }));
+  $('[data-max]', form).onclick = () => { form.points.value = Math.max(bal, r.min_reward_points); update(); };
   update();
   form.onsubmit = (e) => {
     e.preventDefault();
     const body = formData(form);
     body.points = Number(body.points);
-    act(e.submitter, async () => {
-      await api('/me/rewards', { method: 'POST', body });
-      route();
-    }, 'Reward request sent');
+    if (body.payout_number) store.set('payout', body.payout_number);
+    act(e.submitter, async () => { await api('/me/rewards', { method: 'POST', body }); route(); }, 'Reward request sent');
   };
-  app.querySelectorAll('[data-cancel]').forEach((b) => {
-    b.onclick = () => act(b, async () => {
-      await api(`/me/rewards/${b.dataset.cancel}/cancel`, { method: 'POST', body: {} });
-      route();
-    }, 'Request cancelled, points returned');
-  });
+  $$('[data-cancel]').forEach((b) => (b.onclick = () => act(b, async () => {
+    await api(`/me/rewards/${b.dataset.cancel}/cancel`, { method: 'POST', body: {} });
+    route();
+  }, 'Request cancelled, points returned')));
 }
 
-async function viewMyHistory(params) {
+// ---------- Leaderboard (both roles) ----------
+
+async function viewLeaderboard(params) {
   const month = params.get('month') || thisMonth();
-  const h = await api(`/me/history?month=${month}`);
-  app.innerHTML = `<div class="card"><div class="card-head"><h2>My history</h2>
-      <input type="month" id="month" value="${month}" style="max-width:200px"></div>
-      ${statCards(h.balances.month.green, h.balances.month.red, h.balances.month.black)}</div>
-    ${historyTables(h)}`;
-  $('#month').onchange = (e) => (location.hash = `#/history?month=${e.target.value}`);
+  const lb = await api(`/leaderboard?month=${month}`);
+  const top = lb.rows.slice(0, 3);
+  const order = [1, 0, 2].filter((i) => top[i]);
+  const cls = ['first', 'second', 'third'];
+  const colors = ['lime', 'teal', 'pink'];
+  $('#app').innerHTML = `
+    ${pageHead('Leaderboard', `Who earned the most green points in ${fmtMonth(month)}`, monthInput(month, '#/leaderboard'))}
+    ${
+      lb.rows.length
+        ? `<div class="card"><div class="podium">${order
+            .map((i) => {
+              const x = top[i];
+              return `<div class="p ${cls[i]} ${colors[i]}"><span class="medal">${['🥇', '🥈', '🥉'][i]}</span>${avatar(x.name, 'lg')}
+                <strong>${esc(x.name)}</strong><span class="small">${esc(x.job_title || 'Staff')}</span>
+                <span class="t-big num" style="font-size:1.6rem;font-weight:800">${x.green}</span><span class="tiny">green points</span></div>`;
+            })
+            .join('')}</div></div>
+          <div class="card"><div class="table-wrap"><table><thead><tr><th>#</th><th>Employee</th><th>Green</th><th>Red</th><th>Black</th><th>Early days</th><th>Present</th></tr></thead><tbody>
+          ${lb.rows
+            .map(
+              (x, i) => `<tr ${x.user_id === me.id ? 'style="background:var(--sunken)"' : ''}><td class="rank">${i + 1}</td>
+                <td><div class="row">${avatar(x.name, 'sm')}<div><strong>${esc(x.name)}</strong><div class="tiny muted">${esc(x.job_title || 'Staff')}</div></div></div></td>
+                <td><span class="chip lime num">${x.green}</span></td><td><span class="chip pink num">${x.red}</span></td><td><span class="chip dark num">${x.black}</span></td>
+                <td class="num">${x.early}</td><td class="num">${x.days_present}</td></tr>`,
+            )
+            .join('')}</tbody></table></div></div>`
+        : `<div class="card">${empty('trophy', 'No employees yet')}</div>`
+    }`;
 }
 
-// ---------- Owner views ----------
+// ---------- Account (both roles) ----------
 
-async function viewOverview(params) {
-  const date = params.get('date') || '';
-  const o = await api(`/admin/overview${date ? `?date=${date}` : ''}`);
-  pending = o.pending;
-  renderNav('');
-  const counts = {};
-  for (const r of o.rows) counts[r.status] = (counts[r.status] || 0) + 1;
-  const present = (counts.early || 0) + (counts.on_time || 0) + (counts.late || 0) + (counts.very_late || 0);
-  app.innerHTML = `
-    ${o.pending.leaves || o.pending.rewards ? `<div class="notice amber">You have
-      ${o.pending.leaves ? `<a href="#/leaves">${o.pending.leaves} pending leave request(s)</a>` : ''}
-      ${o.pending.leaves && o.pending.rewards ? ' and ' : ''}
-      ${o.pending.rewards ? `<a href="#/rewards">${o.pending.rewards} pending reward request(s)</a>` : ''}.</div>` : ''}
-    <div class="card">
-      <div class="card-head"><h2>Attendance · ${fmtDate(o.date)}</h2>
-        <input type="date" id="date" value="${o.date}" style="max-width:200px"></div>
-      ${o.work_day ? '' : '<div class="notice amber">Not a work day.</div>'}
-      <div class="grid grid-4" style="margin-bottom:16px">
-        <div class="stat brand"><div class="label">Present</div><div class="value num">${present}/${o.rows.length}</div></div>
-        <div class="stat green"><div class="label"><span class="dot green"></span>Early</div><div class="value num">${counts.early || 0}</div></div>
-        <div class="stat red"><div class="label"><span class="dot red"></span>Late</div><div class="value num">${(counts.late || 0) + (counts.very_late || 0)}</div></div>
-        <div class="stat black"><div class="label"><span class="dot black"></span>Absent</div><div class="value num">${counts.absent || 0}</div></div>
+async function viewAccount() {
+  const theme = store.get('theme', 'system');
+  $('#app').innerHTML = `
+    ${pageHead('Account', 'Your profile and preferences')}
+    <div class="grid g2">
+      <div class="card">
+        <div class="row" style="gap:16px">${avatar(me.name, 'lg')}<div><h2 style="font-size:1.2rem">${esc(me.name)}</h2>
+          <p class="muted small">${me.role === 'owner' ? 'Owner' : esc(me.job_title || 'Staff')} · @${esc(me.username)}</p></div></div>
+        <div class="list mt">
+          <div class="list-item">${icon('briefcase')}<div class="grow"><strong>Company</strong><span>${esc(company)}</span></div></div>
+          <div class="list-item">${icon('phone')}<div class="grow"><strong>Phone</strong><span>${esc(me.phone || '—')}</span></div></div>
+          <div class="list-item">${icon('calendar')}<div class="grow"><strong>Member since</strong><span>${fmtLong(me.created_at || me.start_date)}</span></div></div>
+        </div>
       </div>
-      ${
-        o.rows.length
-          ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Check in</th><th>Check out</th><th>Status</th><th>Distance</th><th></th></tr></thead><tbody>${o.rows
-              .map(
-                (r) => `<tr><td><strong>${esc(r.name)}</strong><br><span class="muted small">${esc(r.job_title || '')}</span></td>
-                  <td class="num">${fmtTime(r.check_in_time)}</td><td class="num">${fmtTime(r.check_out_time)}</td>
-                  <td>${badge(STATUS, r.status)}</td><td class="num">${r.distance_m == null ? '—' : `${r.distance_m} m`}</td>
-                  <td>${r.check_in_time ? '' : `<button class="btn small light" data-manual="${r.id}" data-name="${esc(r.name)}">Record manually</button>`}</td></tr>`,
-              )
-              .join('')}</tbody></table></div>`
-          : '<p class="empty">No employees yet. <a href="#/employees">Add your staff</a>.</p>'
-      }
-    </div>
-    <div class="card"><h2>Check-in rules</h2>${windowsHtml(o.rules)}
-      <p class="muted small" style="margin-top:8px">Red = ${money(o.rules.red_value, o.rules.currency)} deduction · Black = ${money(o.rules.black_value, o.rules.currency)} deduction · Green = ${money(o.rules.green_value, o.rules.currency)} reward.
-      Work days: ${o.rules.work_days.map((d) => DAYS[d].slice(0, 3)).join(', ')}.</p></div>`;
-  $('#date').onchange = (e) => (location.hash = `#/?date=${e.target.value}`);
-  app.querySelectorAll('[data-manual]').forEach((b) => {
-    b.onclick = () =>
-      modal(
-        `<h2>Record attendance · ${b.dataset.name}</h2>
-        <p class="muted small">Use this when GPS failed. It clears the absence for that day. Points are not added automatically — use the Points page if needed.</p>
-        <div class="form-grid">
-          <div class="field"><label>Date</label><input type="date" name="work_date" value="${o.date}" required></div>
-          <div class="field"><label>Time</label><input type="time" name="time" value="${o.rules.early_end}" required></div>
+      <div class="stack-col">
+        <div class="card"><div class="card-head"><h2>Appearance</h2></div>
+          <div class="seg" id="theme-seg">${['system', 'light', 'dark']
+            .map((t) => `<button type="button" data-t="${t}" class="${theme === t ? 'on' : ''}">${icon(t === 'dark' ? 'moon' : t === 'light' ? 'sun' : 'settings')}${t[0].toUpperCase() + t.slice(1)}</button>`)
+            .join('')}</div>
+          <p class="muted small mt">Tip: press <kbd>⌘K</kbd> or <kbd>/</kbd> anywhere to search.</p>
         </div>
-        <div class="field" style="margin-top:12px"><label>Status</label><select name="status">
-          ${['early', 'on_time', 'late', 'very_late', 'off_day'].map((s) => `<option value="${s}" ${s === 'on_time' ? 'selected' : ''}>${STATUS[s][0]}</option>`).join('')}
-        </select></div>`,
-        async (data) => {
-          await api('/admin/attendance', { method: 'POST', body: { ...data, user_id: Number(b.dataset.manual) } });
-          toast('Attendance recorded', 'success');
-          route();
-        },
-      );
-  });
-}
-
-async function viewEmployees() {
-  const users = await api('/admin/users');
-  app.innerHTML = `
-    <div class="card">
-      <h2>Add employee</h2>
-      <form id="add">
-        <div class="form-grid">
-          <div class="field"><label>Full name</label><input name="name" required></div>
-          <div class="field"><label>Username</label><input name="username" pattern="[A-Za-z0-9_.@\\-]{3,40}" title="3+ letters/numbers, no spaces" autocomplete="off" required></div>
-          <div class="field"><label>Password</label><input name="password" type="text" minlength="6" autocomplete="off" required></div>
-          <div class="field"><label>Job title</label><input name="job_title"></div>
-          <div class="field"><label>Phone</label><input name="phone" inputmode="tel"></div>
-          <div class="field"><label>Role</label><select name="role"><option value="employee">Employee</option><option value="owner">Owner / manager</option></select></div>
-        </div>
-        <button class="btn" type="submit" style="margin-top:12px">Add</button>
-      </form>
-    </div>
-    <div class="card"><h2>Team</h2>
-      <div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Phone</th><th>Green</th><th>Red (month)</th><th>Black (month)</th><th>Status</th><th></th></tr></thead><tbody>
-      ${users
-        .map(
-          (u) => `<tr>
-            <td><strong>${esc(u.name)}</strong><br><span class="muted small">${u.role === 'owner' ? 'Owner' : esc(u.job_title || 'Employee')}</span></td>
-            <td class="num">${esc(u.username)}</td><td class="num">${esc(u.phone || '—')}</td>
-            <td class="num">${u.balances ? u.balances.green : '—'}</td>
-            <td class="num">${u.balances ? u.balances.month.red : '—'}</td>
-            <td class="num">${u.balances ? u.balances.month.black : '—'}</td>
-            <td>${u.active ? '<span class="badge green">Active</span>' : '<span class="badge">Inactive</span>'}</td>
-            <td><div class="btn-row">
-              ${u.role === 'employee' ? `<a class="btn small light" href="#/staff?id=${u.id}">History</a>` : ''}
-              <button class="btn small light" data-edit="${u.id}">Edit</button>
-              ${u.id !== me.id ? `<button class="btn small light" data-toggle="${u.id}" data-active="${u.active}">${u.active ? 'Deactivate' : 'Activate'}</button>` : ''}
-            </div></td></tr>`,
-        )
-        .join('')}
-      </tbody></table></div></div>`;
-  $('#add').onsubmit = (e) => {
+        <div class="card"><div class="card-head"><h2>Change password</h2></div>
+          <form id="pw" class="grid">
+            <label class="f">Current password<input name="current" type="password" autocomplete="current-password" required></label>
+            <label class="f">New password<input name="next" type="password" minlength="6" autocomplete="new-password" required></label>
+            <div><button class="btn" type="submit">${icon('key')}Update password</button></div>
+          </form></div>
+        <button class="btn light" data-logout>${icon('logout')}Log out</button>
+      </div>
+    </div>`;
+  $$('#theme-seg [data-t]').forEach((b) => (b.onclick = () => {
+    setTheme(b.dataset.t);
+    $$('#theme-seg button').forEach((x) => x.classList.toggle('on', x === b));
+  }));
+  $('#pw').onsubmit = (e) => {
     e.preventDefault();
-    act(e.submitter, async () => {
-      await api('/admin/users', { method: 'POST', body: formData(e.target) });
-      route();
-    }, 'Employee added');
+    act(e.submitter, async () => { await api('/me/password', { method: 'POST', body: formData(e.target) }); e.target.reset(); }, 'Password updated');
   };
-  app.querySelectorAll('[data-edit]').forEach((b) => {
-    const u = users.find((x) => x.id === Number(b.dataset.edit));
-    b.onclick = () =>
-      modal(
-        `<h2>Edit ${esc(u.name)}</h2>
-        <div class="field"><label>Full name</label><input name="name" value="${esc(u.name)}" required></div>
-        <div class="form-grid">
-          <div class="field"><label>Job title</label><input name="job_title" value="${esc(u.job_title || '')}"></div>
-          <div class="field"><label>Phone</label><input name="phone" value="${esc(u.phone || '')}"></div>
+}
+
+// ---------- Owner: dashboard ----------
+
+const PRESENT = ['early', 'on_time', 'late', 'very_late'];
+const BOARD_FILTERS = {
+  all: ['All', () => true],
+  present: ['Present', (r) => PRESENT.includes(r.status)],
+  early: ['Early', (r) => r.status === 'early'],
+  late: ['Late', (r) => r.status === 'late' || r.status === 'very_late'],
+  absent: ['Absent', (r) => r.status === 'absent'],
+  waiting: ['Not yet', (r) => r.status === 'waiting'],
+  leave: ['Leave', (r) => r.status === 'leave'],
+};
+
+async function viewOwnerDashboard(params) {
+  const date = params.get('date') || '';
+  const [o, feed] = await Promise.all([api(`/admin/overview${date ? `?date=${date}` : ''}`), api('/admin/feed')]);
+  pending = o.pending;
+  cachedRules = o.rules;
+  renderShell('');
+  renderOnline(o.rows);
+  const r = o.rules;
+  const c = (s) => o.rows.filter((x) => x.status === s).length;
+  const present = o.rows.filter((x) => PRESENT.includes(x.status)).length;
+  const onTime = c('early') + c('on_time');
+  const total = o.rows.length;
+  const isToday = o.date === o.now.date;
+  let filter = 'all';
+  let q = '';
+
+  $('#app').innerHTML = `
+    ${pageHead(`${greeting()}, ${esc(me.name.split(' ')[0])}`, `${fmtLong(o.date)}${o.work_day ? '' : ' · not a work day'}`, `
+      <input type="date" id="date" value="${o.date}" style="width:170px">
+      <button class="btn light" id="add-emp">${icon('plus')}Add employee</button>
+      <a class="btn" href="/api/admin/report.csv?month=${o.date.slice(0, 7)}">${icon('download')}Export</a>`)}
+    <div class="dash">
+      <div class="stack-col">
+        <div class="card">
+          <div class="profile">
+            <div class="photo" style="background:#2f3432;color:#d5d9e0">${logoMark(54)}</div>
+            <div class="meta">
+              <div class="row between"><div><h2>${esc(company)}</h2><p class="muted small">${total} active employee${total === 1 ? '' : 's'} · ${isToday ? 'Live today' : fmtDate(o.date)}</p></div>
+                <button class="icon-btn sm" data-go="#/settings" aria-label="Settings">${icon('settings')}</button></div>
+              <div class="info">
+                <span>${icon('clock')}Early ${fmtTime(r.early_start)} – ${fmtTime(r.early_end)}</span>
+                <span>${icon('ban')}Closes ${fmtTime(r.close)}</span>
+                <span>${icon('pin')}${r.radius_m} m check-in radius</span>
+                <span>${icon('calendar')}${r.work_days.map((d) => DAYS[d].slice(0, 2)).join(' ')}</span>
+              </div>
+            </div>
+          </div>
+          <div class="kpis">
+            ${kpi('Present', `${present}<span class="muted" style="font-size:1rem">/${total}</span>`, 'pink', pct(present, total))}
+            ${kpi('On-time rate', `${pct(onTime, present)}%`, 'teal', pct(onTime, present))}
+            ${kpi('Pending requests', o.pending.leaves + o.pending.rewards, 'lime', Math.min(100, (o.pending.leaves + o.pending.rewards) * 20))}
+          </div>
         </div>
-        <div class="field" style="margin-top:12px"><label>Absences counted from</label><input type="date" name="start_date" value="${esc(u.start_date)}"></div>
-        <div class="field"><label>New password (leave empty to keep)</label><input name="password" type="text" minlength="6" autocomplete="off"></div>`,
-        async (data) => {
-          if (!data.password) delete data.password;
-          await api(`/admin/users/${u.id}`, { method: 'PATCH', body: data });
-          toast('Saved', 'success');
-          route();
-        },
-      );
-  });
-  app.querySelectorAll('[data-toggle]').forEach((b) => {
-    b.onclick = () => {
-      const active = b.dataset.active === '1';
-      if (active && !confirm('Deactivate this account? They will no longer be able to log in.')) return;
-      act(b, async () => {
-        await api(`/admin/users/${b.dataset.toggle}`, { method: 'PATCH', body: { active: !active } });
-        route();
-      });
-    };
+
+        <div class="card">
+          <div class="card-head"><h2>${isToday ? "Today's summary" : 'Summary'}</h2><span class="muted small">Tap a tile to filter</span></div>
+          <div class="grid g4">
+            ${tile('lime', 'Early arrivals', c('early'), `+${c('early')} green`, { attrs: 'data-f="early"' })}
+            ${tile('teal', 'Present', present, `${pct(present, total)}% of team`, { attrs: 'data-f="present"' })}
+            ${tile('pink', 'Late', c('late') + c('very_late'), 'red penalties', { attrs: 'data-f="late"' })}
+            ${tile('dark', isToday && c('waiting') ? 'Not checked in' : 'Absent', isToday && c('waiting') ? c('waiting') : c('absent'), c('leave') ? `${c('leave')} on leave` : '&nbsp;', { attrs: `data-f="${isToday && c('waiting') ? 'waiting' : 'absent'}"` })}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Attendance board</h2>
+            <div class="actions"><div class="input-icon" style="width:200px">${icon('search')}<input id="board-q" placeholder="Search staff"></div></div></div>
+          <div class="seg" id="board-seg" style="margin-bottom:10px">${Object.entries(BOARD_FILTERS)
+            .map(([k, [label]]) => `<button type="button" data-k="${k}" class="${k === 'all' ? 'on' : ''}">${label}</button>`)
+            .join('')}</div>
+          <div id="board"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Last 7 days</h2>
+            <div class="legend"><span><i class="lime"></i>Early</span><span><i class="teal"></i>On time</span><span><i class="pink"></i>Late</span></div></div>
+          <div class="bars">${o.trend
+            .map((t) => {
+              const h = total ? (t.present / total) * 100 : 0;
+              const onT = t.present - t.late - t.early;
+              const part = (n) => (t.present ? (n / t.present) * 100 : 0);
+              return `<div class="col ${t.work_day ? '' : 'off'} ${t.date === o.date ? 'today' : ''}" title="${fmtDate(t.date)}: ${t.present} present">
+                <b class="num">${t.present || ''}</b>
+                <div class="stackbar" style="height:${Math.max(4, h)}%"><i class="lime" style="height:${part(t.early)}%"></i><i class="teal" style="height:${part(onT)}%"></i><i class="pink" style="height:${part(t.late)}%"></i></div>
+                <span>${fmtDate(t.date, { weekday: 'short' })}</span></div>`;
+            })
+            .join('')}</div>
+        </div>
+      </div>
+
+      <div class="card" style="position:sticky;top:16px">
+        <div class="card-head"><h2>Live feed</h2><div class="actions"><span class="tiny muted" id="feed-upd">Updated just now</span>
+          <button class="icon-btn sm" id="feed-refresh" aria-label="Refresh">${icon('refresh')}</button></div></div>
+        <div class="feed" id="feed">${feedHtml(feed)}</div>
+      </div>
+    </div>`;
+
+  const drawBoard = () => {
+    const rows = o.rows.filter(BOARD_FILTERS[filter][1]).filter((x) => !q || x.name.toLowerCase().includes(q));
+    $('#board').innerHTML = rows.length
+      ? `<div class="list">${rows
+          .map(
+            (x) => `<div class="list-item">${avatar(x.name)}
+              <div class="grow"><strong>${esc(x.name)}</strong><span>${esc(x.job_title || 'Staff')}${x.distance_m != null ? ` · ${Math.round(x.distance_m)} m away` : ''}</span></div>
+              <div class="tiny muted nowrap" style="text-align:right">${x.check_in_time ? `In ${fmtTime(x.check_in_time)}` : ''}${x.check_out_time ? `<br>Out ${fmtTime(x.check_out_time)}` : ''}</div>
+              ${chip(STATUS, x.status)}
+              ${x.check_in_time ? `<a class="icon-btn xs" href="#/staff?id=${x.id}" aria-label="Profile">${icon('arrow')}</a>` : `<button class="icon-btn xs" data-manual="${x.id}" data-name="${esc(x.name)}" aria-label="Record manually" title="Record manually">${icon('pen')}</button>`}
+            </div>`,
+          )
+          .join('')}</div>`
+      : total
+        ? empty('users', 'Nobody matches this filter')
+        : empty('users', 'No employees yet', `<button class="btn sm" id="add-emp-2">${icon('plus')}Add your first employee</button>`);
+    $$('#board [data-manual]').forEach((b) => (b.onclick = () => manualAttendance(b.dataset.manual, b.dataset.name, o.date, r)));
+    $('#add-emp-2')?.addEventListener('click', addEmployeeModal);
+  };
+  const setFilter = (k) => {
+    filter = k;
+    $$('#board-seg button').forEach((b) => b.classList.toggle('on', b.dataset.k === k));
+    $$('[data-f]').forEach((t) => t.classList.toggle('active', t.dataset.f === k));
+    drawBoard();
+  };
+  $$('#board-seg button').forEach((b) => (b.onclick = () => setFilter(b.dataset.k)));
+  $$('[data-f]').forEach((t) => (t.onclick = () => {
+    setFilter(filter === t.dataset.f ? 'all' : t.dataset.f);
+    $('#board').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }));
+  $('#board-q').oninput = (e) => { q = e.target.value.trim().toLowerCase(); drawBoard(); };
+  $('#date').onchange = (e) => go(`#/?date=${e.target.value}`);
+  $('#add-emp').onclick = addEmployeeModal;
+  drawBoard();
+
+  let updated = Date.now();
+  const refreshFeed = async () => {
+    const f = await api('/admin/feed').catch(() => null);
+    if (f && $('#feed')) { $('#feed').innerHTML = feedHtml(f); updated = Date.now(); }
+  };
+  $('#feed-refresh').onclick = (e) => act(e.currentTarget, refreshFeed);
+  every(30000, refreshFeed);
+  every(10000, () => {
+    const el = $('#feed-upd');
+    if (el) el.textContent = `Updated ${relTime(new Date(updated).toISOString())}`;
   });
 }
 
-async function viewStaffHistory(params) {
-  const id = params.get('id');
-  const month = params.get('month') || thisMonth();
-  const [users, h] = await Promise.all([api('/admin/users'), api(`/admin/users/${id}/history?month=${month}`)]);
-  const u = users.find((x) => x.id === Number(id));
-  app.innerHTML = `<div class="card"><div class="card-head"><h2>${esc(u ? u.name : 'Employee')} · history</h2>
-      <input type="month" id="month" value="${month}" style="max-width:200px"></div>
-      ${statCards(h.balances.month.green, h.balances.month.red, h.balances.month.black, ['Green (month)', 'Red (month)', 'Black (month)'])}
-      <p class="muted small" style="margin-top:8px">Green balance: <strong class="num">${h.balances.green}</strong></p></div>
-    ${historyTables(h)}`;
-  $('#month').onchange = (e) => (location.hash = `#/staff?id=${id}&month=${e.target.value}`);
+function feedHtml(feed) {
+  if (!feed.length) return empty('activity', 'Activity will show up here');
+  return feed
+    .map((f) => {
+      let ico = 'clock';
+      let title = '';
+      let tag = '';
+      let side = '';
+      if (f.type === 'checkin') {
+        ico = 'pin';
+        title = `Checked in ${fmtTime(f.extra)}`;
+        tag = chip(STATUS, f.detail);
+        side = f.amount != null ? `<span class="chip">${Math.round(f.amount)} m</span>` : '<span class="chip">Manual</span>';
+      } else if (f.type === 'leave') {
+        ico = 'flag';
+        title = `Leave ${esc(f.extra)}`;
+        tag = chip(REQ, f.detail);
+        side = f.detail === 'pending' ? '<a class="chip amber" href="#/leaves">Review</a>' : '';
+      } else if (f.type === 'reward') {
+        ico = 'gift';
+        title = `Reward ${money(f.amount)} · ${METHODS[f.extra] || ''}`;
+        tag = chip(REQ, f.detail);
+        side = f.detail === 'pending' ? '<a class="chip amber" href="#/rewards">Review</a>' : '';
+      } else {
+        ico = f.detail === 'green' ? 'star' : f.detail === 'red' ? 'alert' : 'ban';
+        title = esc(f.extra || 'Points updated');
+        tag = pointsChip(f.detail, Number(f.amount));
+      }
+      return `<div class="feed-item"><div class="when"><span class="ico">${icon(ico)}</span><span>${shortWhen(f.at)}</span></div>
+        <div class="feed-card"><div class="top">${avatar(f.name, 'sm')}<div class="grow"><strong>${esc(f.name)}</strong><span>${title}</span></div></div>
+        <div class="bottom">${tag}${side}</div></div></div>`;
+    })
+    .join('');
 }
+
+function manualAttendance(userId, name, date, r) {
+  modal({
+    title: `Record attendance`,
+    sub: `For <strong>${esc(name)}</strong>. Use when GPS failed: it clears that day's absence. Points aren't added automatically.`,
+    body: `<div class="form-grid">
+        <label class="f">Date<input type="date" name="work_date" value="${date}" max="${localISODate()}" required></label>
+        <label class="f">Time<input type="time" name="time" value="${r.early_end}" required></label>
+        <div class="f full"><span>Status</span><div class="choice">${['early', 'on_time', 'late', 'very_late', 'off_day']
+          .map((s) => `<label><input type="radio" name="status" value="${s}" ${s === 'on_time' ? 'checked' : ''}>${STATUS[s][0]}</label>`)
+          .join('')}</div></div></div>`,
+    submit: 'Record',
+    onSubmit: async (data) => {
+      await api('/admin/attendance', { method: 'POST', body: { ...data, user_id: Number(userId) } });
+      toast('Attendance recorded', 'success');
+      route();
+    },
+  });
+}
+
+// ---------- Owner: staff ----------
+
+function addEmployeeModal() {
+  modal({
+    title: 'Add employee',
+    sub: 'They log in with this username and password. Absences count from today (or tomorrow if check-in already closed).',
+    body: `<div class="form-grid">
+      <label class="f full">Full name<input name="name" required></label>
+      <label class="f">Username<input name="username" pattern="[A-Za-z0-9_.@\\-]{3,40}" title="3+ letters/numbers, no spaces" autocomplete="off" required></label>
+      <label class="f">Password<div class="row"><input name="password" type="text" minlength="6" autocomplete="off" required>
+        <button type="button" class="icon-btn sm" id="gen-pw" title="Generate" aria-label="Generate password">${icon('refresh')}</button></div></label>
+      <label class="f">Job title<input name="job_title" placeholder="e.g. Network Technician"></label>
+      <label class="f">Phone<input name="phone" inputmode="tel"></label>
+      <div class="f full"><span>Role</span><div class="choice"><label><input type="radio" name="role" value="employee" checked>${icon('user')}Employee</label>
+        <label><input type="radio" name="role" value="owner">${icon('key')}Owner / manager</label></div></div></div>`,
+    submit: 'Add employee',
+    onSubmit: async (data) => {
+      await api('/admin/users', { method: 'POST', body: data });
+      staffCache = null;
+      toast(`${data.name} added. Share: @${data.username} / ${data.password}`, 'success');
+      route();
+    },
+  });
+  $('#gen-pw').onclick = () => {
+    const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+    $('#modal [name=password]').value = Array.from(crypto.getRandomValues(new Uint8Array(8)), (n) => chars[n % chars.length]).join('');
+  };
+}
+
+async function viewStaff(params) {
+  const users = await api('/admin/users');
+  staffCache = users;
+  let show = params.get('show') || 'active';
+  let q = '';
+  $('#app').innerHTML = `
+    ${pageHead('Staff', `${users.filter((u) => u.active && u.role === 'employee').length} active employees`, `<button class="btn" id="add">${icon('plus')}Add employee</button>`)}
+    <div class="card" style="margin-bottom:16px"><div class="row wrap between">
+      <div class="input-icon" style="flex:1;min-width:200px;max-width:360px">${icon('search')}<input id="q" placeholder="Search by name, username, job"></div>
+      <div class="seg" id="show">${['active', 'inactive', 'all'].map((s) => `<button type="button" data-s="${s}" class="${s === show ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div>
+    </div></div>
+    <div class="cards-grid" id="staff"></div>`;
+  const draw = () => {
+    const list = users
+      .filter((u) => (show === 'all' ? true : show === 'active' ? u.active : !u.active))
+      .filter((u) => !q || `${u.name} ${u.username} ${u.job_title || ''}`.toLowerCase().includes(q));
+    $('#staff').innerHTML = list.length
+      ? list
+          .map(
+            (u) => `<div class="card" style="margin:0">
+              <div class="row">${avatar(u.name, 'lg')}<div style="min-width:0;flex:1"><strong style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(u.name)}</strong>
+                <span class="muted small">${u.role === 'owner' ? 'Owner' : esc(u.job_title || 'Employee')}</span></div>
+                ${u.active ? '<span class="chip lime"><span class="dot"></span>Active</span>' : '<span class="chip slate">Inactive</span>'}</div>
+              <div class="muted small mt row wrap" style="gap:14px"><span class="row" style="gap:6px">${icon('at')}${esc(u.username)}</span>${u.phone ? `<span class="row" style="gap:6px">${icon('phone')}${esc(u.phone)}</span>` : ''}</div>
+              ${u.balances ? `<div class="chips mt"><span class="chip lime">${u.balances.green} green</span><span class="chip pink">${u.balances.month.red} red</span><span class="chip dark">${u.balances.month.black} black</span></div>` : ''}
+              <div class="row mt" style="gap:6px">
+                ${u.role === 'employee' ? `<a class="btn sm" href="#/staff?id=${u.id}">${icon('activity')}Profile</a>` : ''}
+                <button class="btn sm light" data-edit="${u.id}">${icon('pen')}Edit</button>
+                ${u.id !== me.id ? `<button class="icon-btn sm" data-toggle="${u.id}" aria-label="${u.active ? 'Deactivate' : 'Activate'}" title="${u.active ? 'Deactivate' : 'Activate'}">${icon(u.active ? 'ban' : 'check')}</button>` : ''}
+              </div></div>`,
+          )
+          .join('')
+      : `<div class="card" style="grid-column:1/-1">${empty('users', 'No staff found')}</div>`;
+    $$('[data-edit]').forEach((b) => (b.onclick = () => editEmployee(users.find((x) => x.id === Number(b.dataset.edit)))));
+    $$('[data-toggle]').forEach((b) => (b.onclick = () => {
+      const u = users.find((x) => x.id === Number(b.dataset.toggle));
+      const run = async () => {
+        await api(`/admin/users/${u.id}`, { method: 'PATCH', body: { active: !u.active } });
+        staffCache = null;
+        toast(u.active ? `${u.name} deactivated` : `${u.name} activated`, 'success');
+        route();
+      };
+      u.active ? confirmBox(`Deactivate ${u.name}?`, 'They will be logged out and can no longer check in. You can re-activate them any time.', run, { submit: 'Deactivate' }) : act(b, run);
+    }));
+  };
+  $('#q').oninput = (e) => { q = e.target.value.trim().toLowerCase(); draw(); };
+  $$('#show button').forEach((b) => (b.onclick = () => {
+    show = b.dataset.s;
+    $$('#show button').forEach((x) => x.classList.toggle('on', x === b));
+    draw();
+  }));
+  $('#add').onclick = addEmployeeModal;
+  draw();
+}
+
+function editEmployee(u) {
+  modal({
+    title: `Edit ${u.name}`,
+    body: `<div class="form-grid">
+      <label class="f full">Full name<input name="name" value="${esc(u.name)}" required></label>
+      <label class="f">Job title<input name="job_title" value="${esc(u.job_title || '')}"></label>
+      <label class="f">Phone<input name="phone" value="${esc(u.phone || '')}"></label>
+      <label class="f">Absences counted from<input type="date" name="start_date" value="${esc(u.start_date)}"></label>
+      <label class="f">New password <span class="muted tiny">(leave empty to keep)</span><input name="password" type="text" minlength="6" autocomplete="off"></label></div>`,
+    onSubmit: async (data) => {
+      if (!data.password) delete data.password;
+      await api(`/admin/users/${u.id}`, { method: 'PATCH', body: data });
+      staffCache = null;
+      toast('Saved', 'success');
+      route();
+    },
+  });
+}
+
+async function viewStaffProfile(params) {
+  const id = Number(params.get('id'));
+  const [users, { h, leaves, month }, o] = await Promise.all([api('/admin/users'), viewHistory(params, id), api('/admin/overview')]);
+  const u = users.find((x) => x.id === id);
+  if (!u) throw new Error('Employee not found');
+  cachedRules = o.rules;
+  const r = o.rules;
+  const b = h.balances;
+  $('#app').innerHTML = `
+    ${pageHead(esc(u.name), `${esc(u.job_title || 'Employee')} · ${fmtMonth(month)}`, `${monthInput(month, `#/staff?id=${id}`)}
+      <button class="btn light" id="edit">${icon('pen')}Edit</button><button class="btn" id="adjust">${icon('star')}Adjust points</button>`)}
+    <div class="dash">
+      <div class="stack-col">
+        <div class="card">
+          <div class="profile">
+            <div class="photo ${hue(u.name)}">${esc(initials(u.name))}</div>
+            <div class="meta"><div><h2>${esc(u.name)}</h2><p class="muted small">${esc(u.job_title || 'Employee')} · since ${fmtDate(u.start_date, { day: 'numeric', month: 'short', year: 'numeric' })}</p></div>
+              <div class="info"><span>${icon('at')}@${esc(u.username)}</span><span>${icon('phone')}${esc(u.phone || '—')}</span>
+              <span>${icon('star')}${b.green} green balance</span><span>${u.active ? `${icon('check')}Active` : `${icon('ban')}Inactive`}</span></div></div>
+          </div>
+          <div class="kpis">
+            ${kpi('Days present', h.attendance.length, 'teal', Math.min(100, h.attendance.length * 4))}
+            ${kpi('Red / Black', `${b.month.red} / ${b.month.black}`, 'pink', Math.min(100, (b.month.red + b.month.black) * 15))}
+            ${kpi('Deduction', money(Math.max(0, b.month.red) * r.red_value + Math.max(0, b.month.black) * r.black_value), 'lime', 50)}
+          </div>
+        </div>
+      </div>
+      <div class="card"><div class="card-head"><h2>Calendar</h2></div>
+        ${calendar(month, { attendance: h.attendance, points: h.points, leaves, workDays: r.work_days, startDate: u.start_date, today: o.now.date })}</div>
+    </div>
+    ${historyLists(h)}`;
+  $('#edit').onclick = () => editEmployee(u);
+  $('#adjust').onclick = () => go(`#/points?user=${id}`);
+}
+
+// ---------- Owner: points ----------
 
 async function viewPoints() {
-  const [users, log] = await Promise.all([api('/admin/users'), api('/admin/points')]);
+  const { params } = parseHash();
+  const [users, log, s] = await Promise.all([api('/admin/users'), api('/admin/points'), api('/admin/settings')]);
+  cachedRules = s;
   const staff = users.filter((u) => u.role === 'employee' && u.active);
-  const today = new Date().toISOString().slice(0, 10);
-  app.innerHTML = `
-    <div class="card">
-      <h2>Owner — adjust points</h2>
-      <form id="adjust">
-        <div class="form-grid">
-          <div class="field"><label>Employee</label><select name="user_id" required>
-            <option value="">Choose…</option>${staff.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></div>
-          <div class="field"><label>Action</label><select name="action">
-            <option value="add">Add</option><option value="remove">Remove</option></select></div>
-          <div class="field"><label>Type</label><select name="kind">
-            <option value="green">🟢 Green point</option><option value="red">🔴 Red penalty</option><option value="black">⚫ Black absence</option></select></div>
-          <div class="field"><label>Points</label><input type="number" name="count" min="1" max="100" value="1" required></div>
-          <div class="field"><label>For date</label><input type="date" name="work_date" value="${today}" required></div>
-        </div>
-        <div class="field" style="margin-top:12px"><label>Reason (required)</label><input name="reason" maxlength="300" required placeholder="Reason is required"></div>
-        <p class="notice" id="effect"></p>
-        <button class="btn" type="submit">Apply</button>
-      </form>
-    </div>
-    <div class="card"><h2>Recent points</h2>${
-      log.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Employee</th><th>Points</th><th>Source</th><th>Reason</th><th>By</th></tr></thead><tbody>${log
-            .map(
-              (p) => `<tr><td>${fmtDate(p.work_date)}</td><td>${esc(p.user_name)}</td><td>${kindBadge(p.kind, p.delta)}</td>
-                <td>${esc(SOURCE[p.source] || p.source)}</td><td class="wrap">${esc(p.reason)}</td><td>${esc(p.created_by_name || 'System')}</td></tr>`,
-            )
-            .join('')}</tbody></table></div>`
-        : '<p class="empty">No points yet.</p>'
-    }</div>`;
+  const pre = params.get('user');
+  $('#app').innerHTML = `
+    ${pageHead('Points', 'Reward great work or record penalties. Every change needs a reason.')}
+    <div class="dash">
+      <div class="card">
+        <div class="card-head"><h2>Owner — adjust points</h2></div>
+        <form id="adjust" class="grid" style="gap:16px">
+          <label class="f">Employee<select name="user_id" required><option value="">Choose…</option>${staff
+            .map((u) => `<option value="${u.id}" ${String(u.id) === pre ? 'selected' : ''}>${esc(u.name)}</option>`)
+            .join('')}</select></label>
+          <div class="f"><span>Action</span><div class="choice"><label><input type="radio" name="action" value="add" checked>${icon('plus')}Add</label><label><input type="radio" name="action" value="remove">${icon('minus')}Remove</label></div></div>
+          <div class="f"><span>Type</span><div class="grid g3">
+            ${['green', 'red', 'black'].map((k, i) => `<label class="tile ${KIND[k][1]}" style="min-height:90px;cursor:pointer"><input type="radio" name="kind" value="${k}" ${i === 0 ? 'checked' : ''} style="position:absolute;opacity:0">
+              <span class="t-title">${KIND[k][0]}</span><span class="t-sub">${money(k === 'green' ? s.green_value : k === 'red' ? s.red_value : s.black_value)}</span></label>`).join('')}
+          </div></div>
+          <div class="form-grid">
+            <label class="f">Points<input type="number" name="count" min="1" max="100" value="1" required></label>
+            <label class="f">For date<input type="date" name="work_date" value="${localISODate()}" required></label>
+          </div>
+          <label class="f">Reason<input name="reason" maxlength="300" required placeholder="Reason is required"></label>
+          <div class="chips" id="reasons">${['Great customer feedback', 'Extra hours', 'Helped a teammate', 'Policy violation', 'Left early without permission'].map((t) => `<button type="button" class="chip">${t}</button>`).join('')}</div>
+          <div class="notice sky" id="effect"></div>
+          <button class="btn xl block" type="submit">${icon('check')}Apply</button>
+        </form>
+      </div>
+      <div class="card"><div class="card-head"><h2>Recent changes</h2>
+        <select id="log-user" style="width:170px"><option value="">Everyone</option>${staff.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></div>
+        <div id="log" class="feed"></div></div>
+    </div>`;
+  const drawLog = (rows) => {
+    $('#log').innerHTML = rows.length
+      ? `<div class="list">${rows
+          .map(
+            (p) => `<div class="list-item">${avatar(p.user_name, 'sm')}<div class="grow"><strong>${esc(p.user_name)}</strong>
+              <span>${esc(SOURCE[p.source] || p.source)}${p.reason ? ` · ${esc(p.reason)}` : ''} · ${fmtDate(p.work_date)}${p.created_by_name ? ` · by ${esc(p.created_by_name)}` : ''}</span></div>${pointsChip(p.kind, p.delta)}</div>`,
+          )
+          .join('')}</div>`
+      : empty('star', 'No points yet');
+  };
+  drawLog(log);
+  $('#log-user').onchange = async (e) => drawLog(await api(`/admin/points${e.target.value ? `?user_id=${e.target.value}` : ''}`));
   const form = $('#adjust');
-  const rules = await api('/admin/settings');
   const update = () => {
     const n = Number(form.count.value) || 0;
-    const sign = form.action.value === 'add' ? 1 : -1;
+    const add = form.action.value === 'add';
     const k = form.kind.value;
-    const value = k === 'green' ? rules.green_value : k === 'red' ? rules.red_value : rules.black_value;
-    const what = k === 'green' ? 'reward value' : 'deduction';
-    $('#effect').innerHTML = `${sign > 0 ? '+' : '−'}<span class="num">${n}</span> ${KIND[k]} = <span class="num">${money(n * value, rules.currency)}</span> ${sign > 0 ? '' : 'less '}${what}`;
+    $$('.tile', form).forEach((t) => t.classList.toggle('active', $('input', t).checked));
+    const value = k === 'green' ? s.green_value : k === 'red' ? s.red_value : s.black_value;
+    const name = form.user_id.selectedOptions[0]?.value ? form.user_id.selectedOptions[0].text : 'the employee';
+    $('#effect').innerHTML = `${icon('alert')}<span>${add ? 'Add' : 'Remove'} <strong>${n} ${KIND[k][0].toLowerCase()}</strong> ${add ? 'to' : 'from'} ${esc(name)}: ${
+      k === 'green' ? `${add ? '+' : '−'}${money(n * value)} reward value` : `${add ? '+' : '−'}${money(n * value)} deduction`
+    }</span>`;
   };
   form.oninput = update;
+  form.onchange = update;
+  $$('#reasons .chip').forEach((b) => (b.onclick = () => { form.reason.value = b.textContent; }));
   update();
   form.onsubmit = (e) => {
     e.preventDefault();
     const d = formData(form);
-    const body = {
-      user_id: Number(d.user_id),
-      kind: d.kind,
-      delta: (d.action === 'add' ? 1 : -1) * Number(d.count),
-      reason: d.reason,
-      work_date: d.work_date,
-    };
     act(e.submitter, async () => {
-      await api('/admin/points', { method: 'POST', body });
-      route();
+      await api('/admin/points', { method: 'POST', body: { user_id: Number(d.user_id), kind: d.kind, delta: (d.action === 'add' ? 1 : -1) * Number(d.count), reason: d.reason, work_date: d.work_date } });
+      form.reason.value = '';
+      drawLog(await api('/admin/points'));
     }, 'Points updated');
   };
 }
 
-function requestFilter(active, base) {
-  const opts = base === 'leaves' ? ['pending', 'approved', 'rejected', 'cancelled'] : ['pending', 'paid', 'rejected', 'cancelled'];
-  return `<div class="btn-row">${['', ...opts]
-    .map((s) => `<a class="btn small ${s === active ? '' : 'light'}" href="#/${base}${s ? `?status=${s}` : ''}">${s ? REQ[s][0] : 'All'}</a>`)
+// ---------- Owner: requests ----------
+
+function statusSeg(base, active, opts) {
+  return `<div class="seg">${['', ...opts]
+    .map((s) => `<a href="#/${base}${s ? `?status=${s}` : ''}" class="${s === active ? 'on' : ''}">${s ? REQ[s][0] : 'All'}</a>`)
     .join('')}</div>`;
 }
 
-async function viewLeaves(params) {
-  const status = params.get('status') || '';
+async function viewLeaveRequests(params) {
+  const status = params.get('status') ?? 'pending';
   const list = await api(`/admin/leaves${status ? `?status=${status}` : ''}`);
-  app.innerHTML = `<div class="card"><div class="card-head"><h2>Leave requests</h2>${requestFilter(status, 'leaves')}</div>
-    <p class="muted small">When you approve leave, the system won't record black absences for those days (and removes any already recorded).</p>
-    ${
+  $('#app').innerHTML = `
+    ${pageHead('Leave requests', 'Approved leave removes absences for those days.', statusSeg('leaves', status, ['pending', 'approved', 'rejected', 'cancelled']))}
+    <div class="cards-grid">${
       list.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>From</th><th>To</th><th>Reason</th><th>Status</th><th>Action</th></tr></thead><tbody>${list
+        ? list
             .map(
-              (l) => `<tr><td><strong>${esc(l.user_name)}</strong></td><td>${fmtDate(l.from_date)}</td><td>${fmtDate(l.to_date)}</td>
-                <td class="wrap">${esc(l.reason) || '—'}</td><td>${badge(REQ, l.status)}</td>
-                <td>${l.status === 'pending' ? `<div class="btn-row"><button class="btn small green" data-id="${l.id}" data-d="approve">✓ Approve</button>
-                  <button class="btn small red" data-id="${l.id}" data-d="reject">✕ Reject</button></div>` : ''}</td></tr>`,
+              (l) => `<div class="card" style="margin:0">
+                <div class="row">${avatar(l.user_name)}<div class="grow" style="flex:1;min-width:0"><strong>${esc(l.user_name)}</strong><div class="tiny muted">${relTime(l.created_at)}</div></div>${chip(REQ, l.status)}</div>
+                <div class="tile amber mt" style="min-height:auto"><div class="row between"><div><div class="t-sub">From → To</div><strong>${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}</strong></div>
+                  <div class="t-num num">${daysBetween(l.from_date, l.to_date) + 1}d</div></div></div>
+                <p class="small mt" style="color:var(--ink-2)">${l.reason ? esc(l.reason) : '<span class="muted">No reason given</span>'}</p>
+                ${l.status === 'pending' ? `<div class="row mt"><button class="btn sm green" data-id="${l.id}" data-d="approve">${icon('check')}Approve</button>
+                  <button class="btn sm light" data-id="${l.id}" data-d="reject">${icon('x')}Reject</button></div>` : ''}
+              </div>`,
             )
-            .join('')}</tbody></table></div>`
-        : '<p class="empty">No leave requests.</p>'
+            .join('')
+        : `<div class="card" style="grid-column:1/-1">${empty('flag', status === 'pending' ? 'No pending leave requests. All clear!' : 'Nothing here')}</div>`
     }</div>`;
-  app.querySelectorAll('[data-d]').forEach((b) => {
-    b.onclick = () => act(b, async () => {
-      await api(`/admin/leaves/${b.dataset.id}/decision`, { method: 'POST', body: { decision: b.dataset.d } });
-      await refreshPending();
-      route();
-    }, b.dataset.d === 'approve' ? 'Leave approved' : 'Leave rejected');
-  });
+  $$('[data-d]').forEach((b) => (b.onclick = () => act(b, async () => {
+    await api(`/admin/leaves/${b.dataset.id}/decision`, { method: 'POST', body: { decision: b.dataset.d } });
+    await refreshCounts();
+    route();
+  }, b.dataset.d === 'approve' ? 'Leave approved' : 'Leave rejected')));
 }
 
-async function viewRewards(params) {
-  const status = params.get('status') || '';
+async function viewRewardRequests(params) {
+  const status = params.get('status') ?? 'pending';
   const [list, s] = await Promise.all([api(`/admin/rewards${status ? `?status=${status}` : ''}`), api('/admin/settings')]);
-  app.innerHTML = `<div class="card"><div class="card-head"><h2>Reward requests</h2>${requestFilter(status, 'rewards')}</div>
-    <p class="muted small">Points are reserved when the employee sends the request. Mark it paid after you transfer the money, or reject to return the points.</p>
-    ${
+  cachedRules = s;
+  const total = list.filter((x) => x.status === 'pending').reduce((a, x) => a + x.amount, 0);
+  $('#app').innerHTML = `
+    ${pageHead('Reward requests', total ? `${money(total)} waiting to be paid` : 'Points are reserved when requested and returned if rejected.', statusSeg('rewards', status, ['pending', 'paid', 'rejected', 'cancelled']))}
+    <div class="cards-grid">${
       list.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Date</th><th>Points</th><th>Amount</th><th>Payout</th><th>Status</th><th>Action</th></tr></thead><tbody>${list
+        ? list
             .map(
-              (r) => `<tr><td><strong>${esc(r.user_name)}</strong></td><td>${fmtDate(r.created_at)}</td><td class="num">${r.points}</td>
-                <td class="num"><strong>${money(r.amount, s.currency)}</strong></td>
-                <td>${METHODS[r.method]}<br><span class="muted num">${esc(r.payout_number || '')}</span></td><td>${badge(REQ, r.status)}</td>
-                <td>${r.status === 'pending' ? `<div class="btn-row"><button class="btn small green" data-id="${r.id}" data-d="paid">✓ Mark paid</button>
-                  <button class="btn small red" data-id="${r.id}" data-d="reject">✕ Reject</button></div>` : ''}</td></tr>`,
+              (x) => `<div class="card" style="margin:0">
+                <div class="row">${avatar(x.user_name)}<div style="flex:1;min-width:0"><strong>${esc(x.user_name)}</strong><div class="tiny muted">${relTime(x.created_at)}</div></div>${chip(REQ, x.status)}</div>
+                <div class="tile lime mt" style="min-height:auto"><div class="row between"><div><div class="t-sub">${x.points} green points</div><div class="t-big num" style="font-size:1.6rem">${money(x.amount)}</div></div>${icon('gift')}</div></div>
+                <div class="list-item" style="border:0;padding-inline:0">${icon(x.method === 'cash' ? 'wallet' : 'phone')}<div class="grow"><strong>${METHODS[x.method]}</strong><span class="num">${esc(x.payout_number || 'Pay in person')}</span></div>
+                  ${x.payout_number ? `<button class="icon-btn xs" data-copy="${esc(x.payout_number)}" aria-label="Copy number" title="Copy">${icon('copy')}</button>` : ''}</div>
+                ${x.status === 'pending' ? `<div class="row"><button class="btn sm green" data-id="${x.id}" data-d="paid">${icon('check')}Mark paid</button>
+                  <button class="btn sm light" data-id="${x.id}" data-d="reject">${icon('x')}Reject</button></div>` : ''}
+              </div>`,
             )
-            .join('')}</tbody></table></div>`
-        : '<p class="empty">No reward requests.</p>'
+            .join('')
+        : `<div class="card" style="grid-column:1/-1">${empty('gift', status === 'pending' ? 'No pending reward requests' : 'Nothing here')}</div>`
     }</div>`;
-  app.querySelectorAll('[data-d]').forEach((b) => {
-    b.onclick = () => act(b, async () => {
+  $$('[data-copy]').forEach((b) => (b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); toast('Number copied', 'success'); } catch { toast('Copy failed', 'error'); }
+  }));
+  $$('[data-d]').forEach((b) => (b.onclick = () => {
+    const run = async () => {
       await api(`/admin/rewards/${b.dataset.id}/decision`, { method: 'POST', body: { decision: b.dataset.d } });
-      await refreshPending();
+      await refreshCounts();
+      toast(b.dataset.d === 'paid' ? 'Marked as paid' : 'Rejected, points returned', 'success');
       route();
-    }, b.dataset.d === 'paid' ? 'Marked as paid' : 'Rejected, points returned');
-  });
+    };
+    b.dataset.d === 'paid' ? confirmBox('Mark as paid?', 'Confirm you have transferred the money. The employee will be notified.', run, { submit: 'Yes, paid', danger: false }) : act(b, run);
+  }));
 }
+
+// ---------- Owner: report ----------
 
 async function viewReport(params) {
   const month = params.get('month') || thisMonth();
   const [rep, s] = await Promise.all([api(`/admin/report?month=${month}`), api('/admin/settings')]);
-  const total = rep.rows.reduce((a, r) => a + r.total_deduction, 0);
-  app.innerHTML = `<div class="card">
-    <div class="card-head"><h2>Monthly report</h2>
-      <div class="btn-row"><input type="month" id="month" value="${month}" style="max-width:200px">
-      <a class="btn light" href="/api/admin/report.csv?month=${month}">⬇ Export CSV</a></div></div>
-    <p class="muted small">Red = ${money(s.red_value, s.currency)} each · Black = ${money(s.black_value, s.currency)} each. Total deductions this month: <strong class="num">${money(total, s.currency)}</strong></p>
-    ${
+  cachedRules = s;
+  const sum = (k) => rep.rows.reduce((a, r) => a + r[k], 0);
+  $('#app').innerHTML = `
+    ${pageHead('Monthly report', fmtMonth(month), `${monthInput(month, '#/reports')}
+      <button class="btn light" onclick="window.print()">${icon('printer')}Print</button>
+      <a class="btn" href="/api/admin/report.csv?month=${month}">${icon('download')}Export CSV</a>`)}
+    <div class="grid g4" style="margin-bottom:16px">
+      ${tile('pink', 'Total deductions', money(sum('total_deduction')), `${sum('red')} red · ${sum('black')} black`, { arrow: false })}
+      ${tile('teal', 'Days present', sum('days_present'), `${sum('late')} late arrivals`, { big: true, arrow: false })}
+      ${tile('lime', 'Green earned', sum('green_month'), `${sum('early')} early check-ins`, { big: true, arrow: false })}
+      ${tile('amber', 'Leave days', sum('leave_days'), 'approved', { big: true, arrow: false })}
+    </div>
+    <div class="card">${
       rep.rows.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Present</th><th>Early</th><th>On time</th><th>Late</th><th>Leave</th>
-            <th>🟢 Green</th><th>🔴 Red</th><th>⚫ Black</th><th>Deduction</th></tr></thead><tbody>${rep.rows
-              .map(
-                (r) => `<tr><td><a href="#/staff?id=${r.user_id}&month=${month}"><strong>${esc(r.name)}</strong></a>${r.active ? '' : ' <span class="badge">Inactive</span>'}</td>
-                  <td class="num">${r.days_present}</td><td class="num">${r.early}</td><td class="num">${r.on_time}</td><td class="num">${r.late}</td><td class="num">${r.leave_days}</td>
-                  <td class="num">${r.green_month} <span class="muted small">(bal ${r.green_balance})</span></td>
-                  <td class="num">${r.red}</td><td class="num">${r.black}</td>
-                  <td class="num"><strong>${money(r.total_deduction, s.currency)}</strong></td></tr>`,
-              )
-              .join('')}</tbody></table></div>`
-        : '<p class="empty">No employees.</p>'
+        ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Present</th><th>Early</th><th>On time</th><th>Late</th><th>Leave</th><th>Green</th><th>Red</th><th>Black</th><th>Deduction</th></tr></thead><tbody>
+          ${rep.rows
+            .map(
+              (r) => `<tr><td><a href="#/staff?id=${r.user_id}&month=${month}" style="text-decoration:none" class="row">${avatar(r.name, 'sm')}<span><strong>${esc(r.name)}</strong>${r.active ? '' : ' <span class="chip slate">Inactive</span>'}</span></a></td>
+                <td class="num">${r.days_present}</td><td class="num">${r.early}</td><td class="num">${r.on_time}</td><td class="num">${r.late}</td><td class="num">${r.leave_days}</td>
+                <td><span class="chip lime num">${r.green_month}</span></td><td><span class="chip pink num">${r.red}</span></td><td><span class="chip dark num">${r.black}</span></td>
+                <td class="num strong">${money(r.total_deduction)}</td></tr>`,
+            )
+            .join('')}</tbody></table></div>`
+        : empty('chart', 'No employees yet')
     }</div>`;
-  $('#month').onchange = (e) => (location.hash = `#/reports?month=${e.target.value}`);
 }
+
+// ---------- Owner: settings ----------
 
 async function viewSettings() {
   const s = await api('/admin/settings');
+  cachedRules = s;
   const mapLink = s.office_lat != null ? `https://www.google.com/maps?q=${s.office_lat},${s.office_lng}` : '';
-  app.innerHTML = `<form id="settings">
-    <div class="card">
-      <h2>Company</h2>
-      <div class="form-grid">
-        <div class="field"><label>Company name</label><input name="company_name" value="${esc(s.company_name)}" required></div>
-        <div class="field"><label>Currency</label><input name="currency" value="${esc(s.currency)}" required></div>
-        <div class="field"><label>Timezone</label><input name="timezone" value="${esc(s.timezone)}" required></div>
+  const timeField = (name, label, color) => `<label class="f"><span class="row" style="gap:6px"><span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${color})"></span>${label}</span><input type="time" name="${name}" value="${s[name]}" required></label>`;
+  $('#app').innerHTML = `
+    ${pageHead('Settings', 'Rules apply to everyone immediately after saving.')}
+    <form id="settings" class="grid" style="gap:16px">
+      ${s.office_lat == null ? `<div class="notice amber">${icon('alert')}Office location isn't set. Staff can't check in until you set it below.</div>` : ''}
+      <div class="grid g2">
+        <div class="card" style="margin:0"><div class="card-head"><h2>Company</h2></div>
+          <div class="form-grid">
+            <label class="f full">Company name<input name="company_name" value="${esc(s.company_name)}" required></label>
+            <label class="f">Currency<input name="currency" value="${esc(s.currency)}" required></label>
+            <label class="f">Timezone<input name="timezone" value="${esc(s.timezone)}" required></label>
+          </div></div>
+        <div class="card" style="margin:0"><div class="card-head"><h2>Office location</h2>${mapLink ? `<a class="btn sm light" href="${mapLink}" target="_blank" rel="noopener">${icon('pin')}View map</a>` : ''}</div>
+          <div class="form-grid">
+            <label class="f">Latitude<input name="office_lat" value="${s.office_lat ?? ''}" inputmode="decimal"></label>
+            <label class="f">Longitude<input name="office_lng" value="${s.office_lng ?? ''}" inputmode="decimal"></label>
+            <label class="f">Allowed radius (m)<input type="number" name="radius_m" value="${s.radius_m}" min="10" required></label>
+            <label class="f">Max GPS uncertainty (m)<input type="number" name="max_accuracy_m" value="${s.max_accuracy_m}" min="5" required></label>
+            <div class="full"><button class="btn light" type="button" id="use-loc">${icon('pin')}Use my current location</button></div>
+          </div></div>
       </div>
-    </div>
-    <div class="card">
-      <h2>Office location (GPS check-in)</h2>
-      ${s.office_lat == null ? '<div class="notice amber">Location not set — staff can\'t check in until you set it.</div>' : ''}
-      <div class="form-grid">
-        <div class="field"><label>Latitude</label><input name="office_lat" value="${s.office_lat ?? ''}" inputmode="decimal"></div>
-        <div class="field"><label>Longitude</label><input name="office_lng" value="${s.office_lng ?? ''}" inputmode="decimal"></div>
-        <div class="field"><label>Allowed radius (m)</label><input type="number" name="radius_m" value="${s.radius_m}" min="10" required></div>
-        <div class="field"><label>Max GPS uncertainty (m)</label><input type="number" name="max_accuracy_m" value="${s.max_accuracy_m}" min="5" required></div>
+      <div class="card" style="margin:0"><div class="card-head"><h2>Check-in times</h2><span class="muted small">Preview updates as you type</span></div>
+        <div id="track-preview"></div>
+        <div class="form-grid mt">
+          ${timeField('early_start', 'Early from', 'lime')}${timeField('early_end', 'Early until', 'lime')}
+          ${timeField('late_after', 'Late after', 'pink')}${timeField('very_late_after', 'Very late after', 'pink')}
+          ${timeField('close', 'Check-in closes', 'black')}
+          <label class="f">Red penalties when very late<input type="number" name="very_late_reds" value="${s.very_late_reds}" min="1" max="10" required></label>
+        </div>
+        <div class="f mt"><span>Work days <span class="muted tiny">(missing one without leave = automatic black)</span></span>
+          <div class="choice">${DAYS.map((d, i) => `<label><input type="checkbox" name="wd" value="${i}" ${s.work_days.includes(i) ? 'checked' : ''}>${d.slice(0, 3)}</label>`).join('')}</div></div>
       </div>
-      <div class="btn-row" style="margin-top:12px">
-        <button class="btn light" type="button" id="use-loc">📍 Use my current location</button>
-        ${mapLink ? `<a class="btn light" href="${mapLink}" target="_blank" rel="noopener">View on map</a>` : ''}
+      <div class="card" style="margin:0"><div class="card-head"><h2>Money rules</h2></div>
+        <div class="grid g4">
+          <label class="tile pink" style="min-height:auto;gap:10px"><span class="t-title">Red penalty deduction</span><input type="number" name="red_value" value="${s.red_value}" min="0" required></label>
+          <label class="tile dark" style="min-height:auto;gap:10px"><span class="t-title">Black absence deduction</span><input type="number" name="black_value" value="${s.black_value}" min="0" required></label>
+          <label class="tile lime" style="min-height:auto;gap:10px"><span class="t-title">Green point reward value</span><input type="number" name="green_value" value="${s.green_value}" min="0" required></label>
+          <label class="tile teal" style="min-height:auto;gap:10px"><span class="t-title">Minimum points per reward</span><input type="number" name="min_reward_points" value="${s.min_reward_points}" min="1" required></label>
+        </div></div>
+      <div class="card row between" style="margin:0;position:sticky;bottom:12px;z-index:5">
+        <span class="muted small" id="dirty">All changes saved</span>
+        <button class="btn" type="submit">${icon('check')}Save settings</button>
       </div>
-    </div>
-    <div class="card">
-      <h2>Check-in times</h2>
-      <div class="form-grid">
-        <div class="field"><label>🟢 Early from</label><input type="time" name="early_start" value="${s.early_start}" required></div>
-        <div class="field"><label>🟢 Early until</label><input type="time" name="early_end" value="${s.early_end}" required></div>
-        <div class="field"><label>🔴 Late after</label><input type="time" name="late_after" value="${s.late_after}" required></div>
-        <div class="field"><label>🔴 Very late after</label><input type="time" name="very_late_after" value="${s.very_late_after}" required></div>
-        <div class="field"><label>⚫ Check-in closes</label><input type="time" name="close" value="${s.close}" required></div>
-        <div class="field"><label>Red penalties for very late</label><input type="number" name="very_late_reds" value="${s.very_late_reds}" min="1" max="10" required></div>
-      </div>
-      <div class="field" style="margin-top:12px"><label>Work days (missing one without leave = automatic black)</label>
-        <div class="checks">${DAYS.map((d, i) => `<label><input type="checkbox" name="wd" value="${i}" ${s.work_days.includes(i) ? 'checked' : ''}> ${d}</label>`).join('')}</div>
-      </div>
-    </div>
-    <div class="card">
-      <h2>Money rules</h2>
-      <div class="form-grid">
-        <div class="field"><label>🔴 Red penalty deduction</label><input type="number" name="red_value" value="${s.red_value}" min="0" required></div>
-        <div class="field"><label>⚫ Black absence deduction</label><input type="number" name="black_value" value="${s.black_value}" min="0" required></div>
-        <div class="field"><label>🟢 Green point reward value</label><input type="number" name="green_value" value="${s.green_value}" min="0" required></div>
-        <div class="field"><label>Minimum points per reward request</label><input type="number" name="min_reward_points" value="${s.min_reward_points}" min="1" required></div>
-      </div>
-    </div>
-    <button class="btn big" type="submit">Save settings</button>
-  </form>`;
+    </form>`;
   const form = $('#settings');
-  $('#use-loc').onclick = (e) =>
-    act(e.currentTarget, async () => {
-      const p = await getPosition();
-      form.office_lat.value = p.lat.toFixed(6);
-      form.office_lng.value = p.lng.toFixed(6);
-      toast(`Location captured (±${Math.round(p.accuracy)} m). Click Save.`, 'success');
-    });
+  const preview = () => {
+    const v = (k) => form[k].value || s[k];
+    try {
+      $('#track-preview').innerHTML = timeTrack({ early_start: v('early_start'), early_end: v('early_end'), late_after: v('late_after'), very_late_after: v('very_late_after'), close: v('close'), very_late_reds: v('very_late_reds') });
+    } catch { /* partial input */ }
+  };
+  preview();
+  form.oninput = () => { preview(); $('#dirty').textContent = 'Unsaved changes'; };
+  form.onchange = form.oninput;
+  $('#use-loc').onclick = (e) => act(e.currentTarget, async () => {
+    const p = await getPosition();
+    form.office_lat.value = p.lat.toFixed(6);
+    form.office_lng.value = p.lng.toFixed(6);
+    $('#dirty').textContent = 'Unsaved changes';
+    toast(`Location captured (±${Math.round(p.accuracy)} m). Don't forget to save.`, 'success');
+  });
   form.onsubmit = (e) => {
     e.preventDefault();
     const d = formData(form);
     delete d.wd;
     const body = {
       ...d,
-      work_days: [...form.querySelectorAll('[name=wd]:checked')].map((c) => Number(c.value)),
+      work_days: $$('[name=wd]:checked', form).map((c) => Number(c.value)),
       office_lat: d.office_lat === '' ? null : Number(d.office_lat),
       office_lng: d.office_lng === '' ? null : Number(d.office_lng),
     };
-    for (const k of ['radius_m', 'max_accuracy_m', 'very_late_reds', 'red_value', 'black_value', 'green_value', 'min_reward_points']) {
-      body[k] = Number(body[k]);
-    }
+    for (const k of ['radius_m', 'max_accuracy_m', 'very_late_reds', 'red_value', 'black_value', 'green_value', 'min_reward_points']) body[k] = Number(body[k]);
     act(e.submitter, async () => {
       const saved = await api('/admin/settings', { method: 'PUT', body });
-      $('#company-name').textContent = saved.company_name;
+      company = saved.company_name;
       route();
     }, 'Settings saved');
   };

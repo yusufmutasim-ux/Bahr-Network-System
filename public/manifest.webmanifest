@@ -5,7 +5,7 @@
   "dir": "ltr",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f4f7fb",
-  "theme_color": "#0b4f6c",
+  "background_color": "#eef3f1",
+  "theme_color": "#2f3432",
   "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
 }

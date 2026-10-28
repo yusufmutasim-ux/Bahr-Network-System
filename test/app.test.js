@@ -164,6 +164,22 @@ test('concurrent check-ins only record one', async () => {
   assert.deepEqual(results.map((r) => r.status).sort(), [201, 409, 409]);
 });
 
+test('feed, leaderboard, streak and trend', async () => {
+  const feed = await owner('/admin/feed');
+  assert.equal(feed.status, 200);
+  assert.ok(feed.body.some((f) => f.type === 'checkin'));
+  assert.ok(feed.body.some((f) => f.type === 'reward'));
+  const lb = await emp('/leaderboard?month=2026-01');
+  assert.equal(lb.status, 200);
+  assert.equal(lb.body.rows[0].name, 'Omar');
+  clock = cairo('2026-01-12', '07:45');
+  const d = (await emp('/me/dashboard')).body;
+  assert.equal(typeof d.streak, 'number');
+  assert.ok(d.month_stats.work_days > 0);
+  const o = (await owner('/admin/overview')).body;
+  assert.equal(o.trend.length, 7);
+});
+
 test('rejects non-JSON writes', async () => {
   const res = await fetch(`${base}/api/login`, { method: 'POST', body: 'username=a&password=b', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
   assert.equal(res.status, 415);

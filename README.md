@@ -29,6 +29,14 @@ Staff attendance and management system for Bahr Network. It covers GPS check-in,
 - **Monthly report:** present, early, on-time, late, leave, green, red and black counts, plus deductions per employee. Can be exported to CSV for Excel.
 - **Settings:** office location (with a "use my current location" button), radius, GPS accuracy, check-in times, work days, money values and currency.
 
+**Experience**
+- Modern dashboard UI with a collapsible sidebar, a live activity feed, a 7-day attendance chart and a filterable attendance board.
+- **Dark mode** (follows the system, or choose in Account).
+- **Command palette:** press `⌘K` / `Ctrl+K` or `/` to jump to any page, employee or action.
+- **Notifications:** the owner sees pending requests; employees see decisions on their leave and reward requests.
+- **Leaderboard** of the month's green points, a personal attendance calendar, an on-time streak and progress toward the next reward.
+- Mobile-first, with a bottom navigation bar on phones. It can be installed to the home screen.
+
 Absences are recorded automatically. Each work day an active employee missed (no check-in and no approved leave) becomes 1 black point.
 
 ## Tech
