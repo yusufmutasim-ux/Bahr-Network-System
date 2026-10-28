@@ -967,7 +967,14 @@ function openMore() {
       <button class="list-item more-row" type="button" data-more-act="logout" style="color:var(--red)">${icon('logout')}<div class="grow"><strong>Log out</strong></div></button>
     </div></div>`;
   $('[data-close]', dlg).onclick = () => dlg.close();
-  $$('a', dlg).forEach((a) => a.addEventListener('click', () => dlg.close()));
+  // Navigate explicitly: closing the dialog first would otherwise cancel the link's own navigation.
+  $$('a[href^="#"]', dlg).forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    dlg.close();
+    const target = a.getAttribute('href');
+    if (location.hash === target) route();
+    else location.hash = target;
+  }));
   $$('[data-more-act]', dlg).forEach((b) => (b.onclick = () => {
     dlg.close();
     ({ search: openPalette, theme: toggleTheme, install: installApp, logout })[b.dataset.moreAct]();
