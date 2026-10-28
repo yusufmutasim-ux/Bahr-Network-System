@@ -1,25 +1,25 @@
-const fs = require('node:fs');
-const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
+// Postgres access. In production (Vercel) this talks to a hosted Postgres such as Neon via DATABASE_URL.
+// Without DATABASE_URL it falls back to PGlite (embedded Postgres) for local development and tests.
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY,
+  id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
-  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  username TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('owner', 'employee')),
   phone TEXT,
   job_title TEXT,
   active INTEGER NOT NULL DEFAULT 1,
   start_date TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users (lower(username));
 
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  expires_at INTEGER NOT NULL
+  expires_at BIGINT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -28,25 +28,25 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 CREATE TABLE IF NOT EXISTS attendance (
-  id INTEGER PRIMARY KEY,
+  id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   work_date TEXT NOT NULL,
   check_in_time TEXT NOT NULL,
-  check_in_at TEXT NOT NULL,
+  check_in_at TIMESTAMPTZ NOT NULL,
   status TEXT NOT NULL,
-  lat REAL,
-  lng REAL,
-  accuracy REAL,
-  distance_m REAL,
+  lat DOUBLE PRECISION,
+  lng DOUBLE PRECISION,
+  accuracy DOUBLE PRECISION,
+  distance_m DOUBLE PRECISION,
   check_out_time TEXT,
-  check_out_at TEXT,
+  check_out_at TIMESTAMPTZ,
   UNIQUE (user_id, work_date)
 );
 
 -- Every green / red / black change is an event; balances are sums of deltas.
 -- work_date is the day the event counts towards in monthly reports.
 CREATE TABLE IF NOT EXISTS points (
-  id INTEGER PRIMARY KEY,
+  id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kind TEXT NOT NULL CHECK (kind IN ('green', 'red', 'black')),
   delta INTEGER NOT NULL,
@@ -55,34 +55,34 @@ CREATE TABLE IF NOT EXISTS points (
   reason TEXT,
   ref_id INTEGER,
   created_by INTEGER REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS points_user_date ON points (user_id, work_date);
 CREATE UNIQUE INDEX IF NOT EXISTS points_one_absence ON points (user_id, work_date) WHERE source = 'absent';
 
 CREATE TABLE IF NOT EXISTS leave_requests (
-  id INTEGER PRIMARY KEY,
+  id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   from_date TEXT NOT NULL,
   to_date TEXT NOT NULL,
   reason TEXT,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
   decided_by INTEGER REFERENCES users(id),
-  decided_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  decided_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS reward_requests (
-  id INTEGER PRIMARY KEY,
+  id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   points INTEGER NOT NULL,
-  amount REAL NOT NULL,
+  amount DOUBLE PRECISION NOT NULL,
   method TEXT NOT NULL CHECK (method IN ('instapay', 'vodafone_cash', 'cash')),
   payout_number TEXT,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'rejected', 'cancelled')),
   decided_by INTEGER REFERENCES users(id),
-  decided_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  decided_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 `;
 
@@ -115,35 +115,110 @@ const DEFAULT_SETTINGS = {
   min_reward_points: 10,
 };
 
-function openDb(file) {
-  if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-  db.exec(SCHEMA);
+// SQL is written with `?` placeholders and converted to Postgres' $1, $2, ...
+const toPg = (sql) => {
+  let i = 0;
+  return sql.replace(/\?/g, () => `$${++i}`);
+};
+
+// Wraps anything with `query(sql, params)` (a pg Pool/Client or PGlite) in a small helper API.
+function wrap(conn, txFn) {
+  const db = {
+    async all(sql, params = []) {
+      return (await conn.query(toPg(sql), params)).rows;
+    },
+    async get(sql, params = []) {
+      return (await conn.query(toPg(sql), params)).rows[0];
+    },
+    async run(sql, params = []) {
+      const r = await conn.query(toPg(sql), params);
+      return { changes: Number(r.rowCount ?? r.affectedRows ?? 0), rows: r.rows };
+    },
+    tx: txFn || ((fn) => fn(db)),
+  };
   return db;
 }
 
-function getSettings(db) {
-  const row = db.prepare("SELECT value FROM settings WHERE key = 'app'").get();
+function connect(url = process.env.DATABASE_URL || process.env.POSTGRES_URL, { pgliteDir } = {}) {
+  let impl;
+  if (url) {
+    const { Pool } = require('pg');
+    const pool = new Pool({ connectionString: url, max: 5 });
+    impl = {
+      query: (sql, params) => pool.query(sql, params),
+      exec: (sql) => pool.query(sql),
+      async transaction(fn) {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          const result = await fn(client);
+          await client.query('COMMIT');
+          return result;
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {});
+          throw err;
+        } finally {
+          client.release();
+        }
+      },
+      close: () => pool.end(),
+    };
+  } else {
+    const { PGlite } = require('@electric-sql/pglite');
+    const pg = new PGlite(pgliteDir);
+    impl = {
+      query: (sql, params) => pg.query(sql, params),
+      exec: (sql) => pg.exec(sql),
+      transaction: (fn) => pg.transaction(fn),
+      close: () => pg.close(),
+    };
+  }
+
+  // Create tables once per process (retried if it fails, e.g. the database was briefly unreachable).
+  // The advisory lock stops parallel cold starts racing on CREATE.
+  let ready = null;
+  const ensureReady = () => {
+    ready ||= impl
+      .transaction(async (c) => {
+        await c.query('SELECT pg_advisory_xact_lock(724001)');
+        await (c.exec ? c.exec(SCHEMA) : c.query(SCHEMA));
+      })
+      .catch((err) => {
+        ready = null;
+        throw err;
+      });
+    return ready;
+  };
+
+  const tx = async (fn) => {
+    await ensureReady();
+    return impl.transaction((c) => fn(wrap(c)));
+  };
+  const base = wrap(
+    {
+      async query(sql, params) {
+        await ensureReady();
+        return impl.query(sql, params);
+      },
+    },
+    tx,
+  );
+  base.ready = ensureReady();
+  base.ready.catch(() => {});
+  base.close = impl.close;
+  return base;
+}
+
+async function getSettings(db) {
+  const row = await db.get(`SELECT value FROM settings WHERE key = 'app'`);
   return { ...DEFAULT_SETTINGS, ...(row ? JSON.parse(row.value) : {}) };
 }
 
-function saveSettings(db, settings) {
-  db.prepare("INSERT INTO settings (key, value) VALUES ('app', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
-    JSON.stringify(settings),
+async function saveSettings(db, settings) {
+  await db.run(
+    `INSERT INTO settings (key, value) VALUES ('app', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+    [JSON.stringify(settings)],
   );
 }
 
-function tx(db, fn) {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-}
-
-module.exports = { openDb, getSettings, saveSettings, tx, DEFAULT_SETTINGS };
+module.exports = { connect, getSettings, saveSettings, DEFAULT_SETTINGS };

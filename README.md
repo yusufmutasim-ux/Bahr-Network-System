@@ -29,48 +29,61 @@ Staff attendance and management system for Bahr Network. It covers GPS check-in,
 - **Monthly report:** present, early, on-time, late, leave, green, red and black counts, plus deductions per employee. Can be exported to CSV for Excel.
 - **Settings:** office location (with a "use my current location" button), radius, GPS accuracy, check-in times, work days, money values and currency.
 
-Absences are recorded automatically. Every 5 minutes, each work day an active employee missed (no check-in and no approved leave) becomes 1 black point.
+Absences are recorded automatically. Each work day an active employee missed (no check-in and no approved leave) becomes 1 black point.
 
 ## Tech
 
-- Node.js ≥ 22.13 and Express 5
-- SQLite through Node's built-in `node:sqlite`, so no native modules need to be compiled
+- Node.js ≥ 20 and Express 5
+- PostgreSQL. In production that's a hosted Postgres such as Neon via `DATABASE_URL`. Locally, with no `DATABASE_URL`, it uses the embedded PGlite automatically, so there's nothing to install.
 - Vanilla JS single-page frontend in `public/`, with no build step
 - Passwords are hashed with scrypt. Sessions use HttpOnly cookies, logins are rate-limited, and JSON-only writes protect against CSRF.
 
-## Run
+## Deploy on Vercel
+
+1. Import the GitHub repo into Vercel. No build settings are needed; `vercel.json` configures everything.
+2. In the Vercel project, open **Storage → Create Database → Neon (Postgres)** and connect it to the project. This adds `DATABASE_URL` automatically.
+   - Or create a free database at [neon.tech](https://neon.tech) and add its connection string as the `DATABASE_URL` environment variable.
+3. Optional: add a `CRON_SECRET` environment variable (any random string). It protects the daily absence job.
+4. **Redeploy** so the new environment variables are picked up.
+5. Open the site. On the first visit you create the owner account. Then go to **Settings** and set the office location.
+
+Tables are created automatically on first request. Absences are recorded whenever the app is used (at most every 5 minutes) and once a day by Vercel Cron (`vercel.json`, 10:30 UTC).
+
+## Run locally
 
 ```bash
 npm install
 npm start
 ```
 
-Open http://localhost:3000. On the first visit you create the owner account. Then go to **Settings** and set the office location.
-
-Environment variables:
+Open http://localhost:3000. Data is stored in `data/pglite` unless `DATABASE_URL` is set.
 
 | Var | Default | |
 |---|---|---|
+| `DATABASE_URL` | unset → embedded PGlite | Postgres connection string |
 | `PORT` | `3000` | |
-| `DB_FILE` | `data/bahr.db` | SQLite database file |
-| `COOKIE_SECURE` | unset | Set to `1` when served over HTTPS |
+| `COOKIE_SECURE` | unset (always on with Vercel) | Set to `1` when served over HTTPS |
+| `CRON_SECRET` | unset | If set, `/api/cron/absences` requires `Authorization: Bearer <secret>` |
 
-> **HTTPS is required in production.** Browsers only allow GPS location on `https://` sites (or on `localhost`). Deploy behind HTTPS (Nginx + Let's Encrypt, Caddy, Render, Railway, etc.) and set `COOKIE_SECURE=1`.
+> Browsers only allow GPS location on `https://` sites (or on `localhost`). Vercel sites are HTTPS by default.
 
 ## Tests
 
 ```bash
-npm test
+npm test                                                        # embedded PGlite
+TEST_DATABASE_URL=postgres://user@host:5432/empty_db npm test   # real Postgres
 ```
 
 ## Project layout
 
 ```
+api/
+  index.js    Vercel serverless entry
 src/
-  server.js   entry point + absence job timer
+  server.js   local server + absence job timer
   app.js      HTTP API (auth, employee, owner routes)
   logic.js    rules: check-in windows, geofence, balances, absences, monthly report
-  db.js       schema + settings
+  db.js       Postgres / PGlite connection, schema, settings
   auth.js     password hashing, sessions, login rate limit
   time.js     timezone/date helpers
 public/       frontend (index.html, app.js, styles.css)

@@ -51,85 +51,112 @@ function checkGeofence({ lat, lng, accuracy }, settings) {
   return Math.round(distance);
 }
 
-function addPoints(db, { userId, kind, delta, workDate, source, reason = null, refId = null, createdBy = null }) {
-  db.prepare(
+async function addPoints(db, { userId, kind, delta, workDate, source, reason = null, refId = null, createdBy = null }) {
+  await db.run(
     `INSERT INTO points (user_id, kind, delta, work_date, source, reason, ref_id, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(userId, kind, delta, workDate, source, reason, refId, createdBy);
+    [userId, kind, delta, workDate, source, reason, refId, createdBy],
+  );
 }
 
-function balances(db, userId, month) {
-  const all = db
-    .prepare(`SELECT kind, COALESCE(SUM(delta), 0) AS total FROM points WHERE user_id = ? GROUP BY kind`)
-    .all(userId);
+const emptyBalance = () => ({ green: 0, month: { green: 0, red: 0, black: 0 } });
+
+// Balances for many users at once: all-time green plus this month's green / red / black.
+async function balancesByUser(db, month, userId = null) {
   const { first, last } = monthBounds(month);
-  const monthly = db
-    .prepare(
-      `SELECT kind, COALESCE(SUM(delta), 0) AS total FROM points
-       WHERE user_id = ? AND work_date BETWEEN ? AND ? GROUP BY kind`,
-    )
-    .all(userId, first, last);
-  const pick = (rows, k) => Number(rows.find((r) => r.kind === k)?.total || 0);
-  return {
-    green: pick(all, 'green'),
-    month: { green: pick(monthly, 'green'), red: pick(monthly, 'red'), black: pick(monthly, 'black') },
-  };
+  const rows = await db.all(
+    `SELECT user_id, kind,
+            COALESCE(SUM(delta), 0) AS total,
+            COALESCE(SUM(delta) FILTER (WHERE work_date BETWEEN ? AND ?), 0) AS month_total
+     FROM points WHERE (?::int IS NULL OR user_id = ?::int) GROUP BY user_id, kind`,
+    [first, last, userId, userId],
+  );
+  const map = new Map();
+  for (const r of rows) {
+    if (!map.has(r.user_id)) map.set(r.user_id, emptyBalance());
+    const b = map.get(r.user_id);
+    if (r.kind === 'green') b.green = Number(r.total);
+    b.month[r.kind] = Number(r.month_total);
+  }
+  return map;
 }
 
-function hasApprovedLeave(db, userId, date) {
-  return !!db
-    .prepare(
-      `SELECT 1 FROM leave_requests WHERE user_id = ? AND status = 'approved' AND ? BETWEEN from_date AND to_date LIMIT 1`,
-    )
-    .get(userId, date);
+async function balances(db, userId, month) {
+  return (await balancesByUser(db, month, userId)).get(userId) || emptyBalance();
+}
+
+async function hasApprovedLeave(db, userId, date) {
+  return !!(await db.get(
+    `SELECT 1 FROM leave_requests WHERE user_id = ? AND status = 'approved' AND ? BETWEEN from_date AND to_date LIMIT 1`,
+    [userId, date],
+  ));
 }
 
 // Gives a black point for every past work day an employee neither checked in nor had approved leave.
 // Today counts once check-in has closed. Safe to run repeatedly (unique index on absences).
-function runAbsenceJob(db, settings, now = new Date(), lookbackDays = 45) {
+async function runAbsenceJob(db, settings, now = new Date(), lookbackDays = 45) {
   const { date: today, time } = localNow(settings.timezone, now);
   const lastDay = toMinutes(time) >= toMinutes(settings.close) ? today : addDays(today, -1);
   const floor = addDays(today, -lookbackDays);
-  const users = db.prepare(`SELECT id, start_date FROM users WHERE role = 'employee' AND active = 1`).all();
-  const hasAttendance = db.prepare(`SELECT 1 FROM attendance WHERE user_id = ? AND work_date = ?`);
-  const insert = db.prepare(
-    `INSERT OR IGNORE INTO points (user_id, kind, delta, work_date, source, reason)
-     VALUES (?, 'black', 1, ?, 'absent', 'Absent without approved leave')`,
-  );
-  let added = 0;
+  if (floor > lastDay) return 0;
+  const [users, attendance, leaves] = await Promise.all([
+    db.all(`SELECT id, start_date FROM users WHERE role = 'employee' AND active = 1`),
+    db.all(`SELECT user_id, work_date FROM attendance WHERE work_date BETWEEN ? AND ?`, [floor, lastDay]),
+    db.all(
+      `SELECT user_id, from_date, to_date FROM leave_requests
+       WHERE status = 'approved' AND to_date >= ? AND from_date <= ?`,
+      [floor, lastDay],
+    ),
+  ]);
+  const present = new Set(attendance.map((a) => `${a.user_id}|${a.work_date}`));
+  const ids = [];
+  const dates = [];
   for (const u of users) {
     const from = u.start_date > floor ? u.start_date : floor;
     if (from > lastDay) continue;
+    const userLeaves = leaves.filter((l) => l.user_id === u.id);
     for (const d of eachDate(from, lastDay)) {
-      if (!isWorkDay(d, settings)) continue;
-      if (hasAttendance.get(u.id, d) || hasApprovedLeave(db, u.id, d)) continue;
-      added += Number(insert.run(u.id, d).changes);
+      if (!isWorkDay(d, settings) || present.has(`${u.id}|${d}`)) continue;
+      if (userLeaves.some((l) => d >= l.from_date && d <= l.to_date)) continue;
+      ids.push(u.id);
+      dates.push(d);
     }
   }
-  return added;
+  if (!ids.length) return 0;
+  const r = await db.run(
+    `INSERT INTO points (user_id, kind, delta, work_date, source, reason)
+     SELECT u, 'black', 1, d, 'absent', 'Absent without approved leave'
+     FROM unnest(?::int[], ?::text[]) AS t(u, d)
+     ON CONFLICT DO NOTHING`,
+    [ids, dates],
+  );
+  return r.changes;
 }
 
-function monthReport(db, settings, month) {
+async function monthReport(db, settings, month) {
   const { first, last } = monthBounds(month);
-  const users = db
-    .prepare(`SELECT id, name, username, job_title, active FROM users WHERE role = 'employee' ORDER BY name`)
-    .all();
-  const attendanceStats = db.prepare(
-    `SELECT COUNT(*) AS days,
-            SUM(status = 'early') AS early,
-            SUM(status = 'on_time') AS on_time,
-            SUM(status IN ('late', 'very_late')) AS late
-     FROM attendance WHERE user_id = ? AND work_date BETWEEN ? AND ?`,
-  );
-  const leaves = db.prepare(
-    `SELECT from_date, to_date FROM leave_requests
-     WHERE user_id = ? AND status = 'approved' AND from_date <= ? AND to_date >= ?`,
-  );
+  const [users, stats, leaves, bal] = await Promise.all([
+    db.all(`SELECT id, name, username, job_title, active FROM users WHERE role = 'employee' ORDER BY name`),
+    db.all(
+      `SELECT user_id, COUNT(*) AS days,
+              COUNT(*) FILTER (WHERE status = 'early') AS early,
+              COUNT(*) FILTER (WHERE status = 'on_time') AS on_time,
+              COUNT(*) FILTER (WHERE status IN ('late', 'very_late')) AS late
+       FROM attendance WHERE work_date BETWEEN ? AND ? GROUP BY user_id`,
+      [first, last],
+    ),
+    db.all(
+      `SELECT user_id, from_date, to_date FROM leave_requests
+       WHERE status = 'approved' AND from_date <= ? AND to_date >= ?`,
+      [last, first],
+    ),
+    balancesByUser(db, month),
+  ]);
   return users.map((u) => {
-    const a = attendanceStats.get(u.id, first, last);
-    const b = balances(db, u.id, month);
+    const a = stats.find((s) => s.user_id === u.id) || {};
+    const b = bal.get(u.id) || emptyBalance();
     let leaveDays = 0;
-    for (const l of leaves.all(u.id, last, first)) {
+    for (const l of leaves.filter((x) => x.user_id === u.id)) {
       const from = l.from_date > first ? l.from_date : first;
       const to = l.to_date < last ? l.to_date : last;
       leaveDays += eachDate(from, to).filter((d) => isWorkDay(d, settings)).length;
@@ -168,6 +195,7 @@ module.exports = {
   checkGeofence,
   addPoints,
   balances,
+  balancesByUser,
   hasApprovedLeave,
   runAbsenceJob,
   monthReport,

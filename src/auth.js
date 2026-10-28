@@ -26,16 +26,16 @@ function parseCookies(header = '') {
   return out;
 }
 
-function createSession(db, userId) {
+async function createSession(db, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const expires = Date.now() + SESSION_DAYS * 864e5;
-  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
-  db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, userId, expires);
+  await db.run('DELETE FROM sessions WHERE expires_at < ?', [Date.now()]);
+  await db.run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)', [token, userId, expires]);
   return { token, expires };
 }
 
 function setSessionCookie(res, token, expires) {
-  const secure = process.env.COOKIE_SECURE === '1' ? '; Secure' : '';
+  const secure = process.env.COOKIE_SECURE === '1' || process.env.VERCEL ? '; Secure' : '';
   res.setHeader(
     'Set-Cookie',
     `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Expires=${new Date(expires).toUTCString()}${secure}`,
@@ -46,20 +46,19 @@ function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
 }
 
-function sessionUser(db, req) {
+async function sessionUser(db, req) {
   const token = parseCookies(req.headers.cookie)[COOKIE];
   if (!token) return null;
-  const row = db
-    .prepare(
-      `SELECT u.id, u.name, u.username, u.role, u.phone, u.job_title, u.active, s.token
-       FROM sessions s JOIN users u ON u.id = s.user_id
-       WHERE s.token = ? AND s.expires_at > ?`,
-    )
-    .get(token, Date.now());
+  const row = await db.get(
+    `SELECT u.id, u.name, u.username, u.role, u.phone, u.job_title, u.active, s.token
+     FROM sessions s JOIN users u ON u.id = s.user_id
+     WHERE s.token = ? AND s.expires_at > ?`,
+    [token, Date.now()],
+  );
   return row && row.active ? row : null;
 }
 
-// Simple in-memory brute-force guard for the login endpoint.
+// Simple in-memory brute-force guard for the login endpoint (per server instance).
 const failures = new Map();
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_FAILURES = 10;

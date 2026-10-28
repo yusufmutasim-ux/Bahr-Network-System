@@ -211,8 +211,12 @@ async function start() {
     if (me.role === 'owner') await refreshPending();
     route();
   } catch {
-    const setup = await api('/setup');
-    setup.needsSetup ? viewSetup(setup) : viewLogin(setup);
+    try {
+      const setup = await api('/setup');
+      setup.needsSetup ? viewSetup(setup) : viewLogin(setup);
+    } catch (err) {
+      app.innerHTML = `<div class="auth"><div class="notice red">${esc(err.message)}</div></div>`;
+    }
   }
 }
 

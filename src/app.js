@@ -1,6 +1,6 @@
 const path = require('node:path');
 const express = require('express');
-const { getSettings, saveSettings, tx } = require('./db');
+const { getSettings, saveSettings } = require('./db');
 const { localNow, addDays, toMinutes, eachDate, isDate, isTime, isMonth } = require('./time');
 const {
   RuleError,
@@ -9,6 +9,7 @@ const {
   checkGeofence,
   addPoints,
   balances,
+  balancesByUser,
   hasApprovedLeave,
   runAbsenceJob,
   monthReport,
@@ -16,17 +17,19 @@ const {
 const auth = require('./auth');
 
 const PAYOUT_METHODS = ['instapay', 'vodafone_cash', 'cash'];
+const ABSENCE_JOB_INTERVAL_MS = 5 * 60 * 1000;
 
 function fail(message, status = 400) {
   throw new RuleError(message, status);
 }
 
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-const posInt = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
+const posInt = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 && Number(v) < 2 ** 31 ? Number(v) : null);
 
 function createApp(db, { now = () => new Date() } = {}) {
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', true);
   app.use(express.json({ limit: '100kb' }));
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -39,115 +42,134 @@ function createApp(db, { now = () => new Date() } = {}) {
   });
 
   const settings = () => getSettings(db);
-  const today = () => localNow(settings().timezone, now());
+  const localToday = (s) => localNow(s.timezone, now());
+  const idParam = (req) => posInt(req.params.id) || fail('Not found', 404);
 
-  function requireUser(req, res, next) {
-    const user = auth.sessionUser(db, req);
+  // Serverless has no long-running timer, so absences are also recorded lazily on requests (throttled).
+  let lastAbsenceRun = 0;
+  async function maybeRunAbsences(s) {
+    if (Date.now() - lastAbsenceRun < ABSENCE_JOB_INTERVAL_MS) return;
+    lastAbsenceRun = Date.now();
+    await runAbsenceJob(db, s, now());
+  }
+
+  async function requireUser(req, res, next) {
+    const user = await auth.sessionUser(db, req);
     if (!user) return res.status(401).json({ error: 'Please log in first' });
     req.user = user;
     next();
   }
 
-  function requireOwner(req, res, next) {
-    requireUser(req, res, () => {
-      if (req.user.role !== 'owner') return res.status(403).json({ error: 'Owner access only' });
-      next();
-    });
-  }
+  const requireRole = (role, message) => [
+    requireUser,
+    (req, res, next) => (req.user.role === role ? next() : res.status(403).json({ error: message })),
+  ];
+  const requireOwner = requireRole('owner', 'Owner access only');
+  const requireEmployee = requireRole('employee', 'Employee access only');
 
-  function requireEmployee(req, res, next) {
-    requireUser(req, res, () => {
-      if (req.user.role !== 'employee') return res.status(403).json({ error: 'Employee access only' });
-      next();
-    });
-  }
+  // Locks the user's row so concurrent balance checks (redeem, rewards, adjustments) can't double-spend.
+  const lockUser = (t, userId, role = 'employee') =>
+    t.get(`SELECT id FROM users WHERE id = ? AND role = ? FOR UPDATE`, [userId, role]);
 
   // ---------- Public ----------
 
-  app.get('/api/time', (req, res) => {
-    const s = settings();
-    res.json({ ...localNow(s.timezone, now()), timezone: s.timezone, company_name: s.company_name });
+  app.get('/api/time', async (req, res) => {
+    const s = await settings();
+    res.json({ ...localToday(s), timezone: s.timezone, company_name: s.company_name });
   });
 
-  app.get('/api/setup', (req, res) => {
-    const count = db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
-    res.json({ needsSetup: count === 0, company_name: settings().company_name });
+  app.get('/api/setup', async (req, res) => {
+    const [{ n }, s] = await Promise.all([db.get('SELECT COUNT(*) AS n FROM users'), settings()]);
+    res.json({ needsSetup: Number(n) === 0, company_name: s.company_name });
   });
 
-  app.post('/api/setup', (req, res) => {
+  app.post('/api/setup', async (req, res) => {
     const name = str(req.body.name, 80);
     const username = str(req.body.username, 40);
     const password = typeof req.body.password === 'string' ? req.body.password : '';
-    if (!name || !username) fail('Name and username are required');
+    if (!name || !/^[\w.@-]{3,40}$/.test(username)) fail('Enter a name and a username (3+ letters, no spaces)');
     if (password.length < 6) fail('Password must be at least 6 characters');
-    const user = tx(db, () => {
-      if (db.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0) fail('System is already set up', 409);
+    const userId = await db.tx(async (t) => {
+      await t.get('SELECT pg_advisory_xact_lock(724002)');
+      if (Number((await t.get('SELECT COUNT(*) AS n FROM users')).n) > 0) fail('System is already set up', 409);
+      const s = await getSettings(t);
       const companyName = str(req.body.company_name, 80);
-      if (companyName) saveSettings(db, { ...settings(), company_name: companyName });
-      const info = db
-        .prepare(`INSERT INTO users (name, username, password_hash, role, start_date) VALUES (?, ?, ?, 'owner', ?)`)
-        .run(name, username, auth.hashPassword(password), today().date);
-      return Number(info.lastInsertRowid);
+      if (companyName) await saveSettings(t, { ...s, company_name: companyName });
+      const row = await t.get(
+        `INSERT INTO users (name, username, password_hash, role, start_date) VALUES (?, ?, ?, 'owner', ?) RETURNING id`,
+        [name, username, auth.hashPassword(password), localToday(s).date],
+      );
+      return row.id;
     });
-    const session = auth.createSession(db, user);
+    const session = await auth.createSession(db, userId);
     auth.setSessionCookie(res, session.token, session.expires);
     res.status(201).json({ ok: true });
   });
 
-  app.post('/api/login', (req, res) => {
+  app.post('/api/login', async (req, res) => {
     const username = str(req.body.username, 40);
     const password = typeof req.body.password === 'string' ? req.body.password : '';
     const key = `${req.ip}|${username.toLowerCase()}`;
     if (auth.loginBlocked(key)) fail('Too many failed attempts. Try again in 15 minutes.', 429);
-    const user = db.prepare('SELECT id, password_hash, active FROM users WHERE username = ?').get(username);
+    const user = await db.get('SELECT id, password_hash, active FROM users WHERE lower(username) = lower(?)', [username]);
     if (!user || !user.active || !auth.verifyPassword(password, user.password_hash)) {
       auth.recordLoginFailure(key);
       fail('Wrong username or password', 401);
     }
     auth.clearLoginFailures(key);
-    const session = auth.createSession(db, user.id);
+    const session = await auth.createSession(db, user.id);
     auth.setSessionCookie(res, session.token, session.expires);
     res.json({ ok: true });
   });
 
-  app.post('/api/logout', (req, res) => {
-    const user = auth.sessionUser(db, req);
-    if (user) db.prepare('DELETE FROM sessions WHERE token = ?').run(user.token);
+  app.post('/api/logout', async (req, res) => {
+    const user = await auth.sessionUser(db, req);
+    if (user) await db.run('DELETE FROM sessions WHERE token = ?', [user.token]);
     auth.clearSessionCookie(res);
     res.json({ ok: true });
   });
 
-  app.get('/api/me', requireUser, (req, res) => {
+  app.get('/api/me', requireUser, async (req, res) => {
     const { token, ...user } = req.user;
-    res.json({ user, company_name: settings().company_name });
+    res.json({ user, company_name: (await settings()).company_name });
   });
 
-  app.post('/api/me/password', requireUser, (req, res) => {
+  app.post('/api/me/password', requireUser, async (req, res) => {
     const { current, next } = req.body;
-    const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
+    const row = await db.get('SELECT password_hash FROM users WHERE id = ?', [req.user.id]);
     if (typeof current !== 'string' || !auth.verifyPassword(current, row.password_hash)) fail('Current password is wrong');
     if (typeof next !== 'string' || next.length < 6) fail('New password must be at least 6 characters');
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(auth.hashPassword(next), req.user.id);
-    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.user.token);
+    await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [auth.hashPassword(next), req.user.id]);
+    await db.run('DELETE FROM sessions WHERE user_id = ? AND token != ?', [req.user.id, req.user.token]);
     res.json({ ok: true });
+  });
+
+  // Called daily by Vercel Cron (see vercel.json). Requests are also covered lazily by maybeRunAbsences.
+  app.get('/api/cron/absences', async (req, res) => {
+    if (process.env.CRON_SECRET && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const added = await runAbsenceJob(db, await settings(), now());
+    res.json({ added });
   });
 
   // ---------- Employee ----------
 
-  app.get('/api/me/dashboard', requireEmployee, (req, res) => {
-    const s = settings();
-    const t = today();
-    const month = t.date.slice(0, 7);
-    const attendance = db
-      .prepare('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?')
-      .get(req.user.id, t.date);
-    const b = balances(db, req.user.id, month);
+  app.get('/api/me/dashboard', requireEmployee, async (req, res) => {
+    const s = await settings();
+    await maybeRunAbsences(s);
+    const t = localToday(s);
+    const [attendance, b, onLeave] = await Promise.all([
+      db.get('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?', [req.user.id, t.date]),
+      balances(db, req.user.id, t.date.slice(0, 7)),
+      hasApprovedLeave(db, req.user.id, t.date),
+    ]);
     const red = Math.max(0, b.month.red);
     const black = Math.max(0, b.month.black);
     res.json({
       now: t,
       work_day: isWorkDay(t.date, s),
-      on_leave: hasApprovedLeave(db, req.user.id, t.date),
+      on_leave: onLeave,
       check_in_window:
         toMinutes(t.time) < toMinutes(s.early_start) ? 'not_open' : toMinutes(t.time) >= toMinutes(s.close) ? 'closed' : 'open',
       attendance: attendance || null,
@@ -163,105 +185,108 @@ function createApp(db, { now = () => new Date() } = {}) {
     });
   });
 
-  app.post('/api/me/check-in', requireEmployee, (req, res) => {
-    const s = settings();
-    const t = today();
+  app.post('/api/me/check-in', requireEmployee, async (req, res) => {
+    const s = await settings();
+    const t = localToday(s);
     const lat = Number(req.body.lat);
     const lng = Number(req.body.lng);
     const accuracy = req.body.accuracy == null ? NaN : Number(req.body.accuracy);
     const distance = checkGeofence({ lat, lng, accuracy }, s);
     const result = isWorkDay(t.date, s) ? classifyCheckIn(t.time, s) : { status: 'off_day', green: 0, red: 0 };
-    const record = tx(db, () => {
-      if (db.prepare('SELECT 1 FROM attendance WHERE user_id = ? AND work_date = ?').get(req.user.id, t.date)) {
+    const record = await db.tx(async (tx) => {
+      await lockUser(tx, req.user.id);
+      if (await tx.get('SELECT 1 FROM attendance WHERE user_id = ? AND work_date = ?', [req.user.id, t.date])) {
         fail('You already checked in today', 409);
       }
-      const info = db
-        .prepare(
-          `INSERT INTO attendance (user_id, work_date, check_in_time, check_in_at, status, lat, lng, accuracy, distance_m)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(req.user.id, t.date, t.time, now().toISOString(), result.status, lat, lng, accuracy || null, distance);
-      const id = Number(info.lastInsertRowid);
+      const row = await tx.get(
+        `INSERT INTO attendance (user_id, work_date, check_in_time, check_in_at, status, lat, lng, accuracy, distance_m)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        [req.user.id, t.date, t.time, now().toISOString(), result.status, lat, lng, accuracy || null, distance],
+      );
       if (result.green) {
-        addPoints(db, {
+        await addPoints(tx, {
           userId: req.user.id, kind: 'green', delta: result.green, workDate: t.date,
-          source: 'early', reason: `Early check-in ${t.time}`, refId: id,
+          source: 'early', reason: `Early check-in ${t.time}`, refId: row.id,
         });
       }
       if (result.red) {
-        addPoints(db, {
+        await addPoints(tx, {
           userId: req.user.id, kind: 'red', delta: result.red, workDate: t.date,
-          source: 'late', reason: `Late check-in ${t.time}`, refId: id,
+          source: 'late', reason: `Late check-in ${t.time}`, refId: row.id,
         });
       }
-      return db.prepare('SELECT * FROM attendance WHERE id = ?').get(id);
+      return row;
     });
     res.status(201).json({ attendance: record, green: result.green, red: result.red });
   });
 
-  app.post('/api/me/check-out', requireEmployee, (req, res) => {
-    const t = today();
-    const row = db.prepare('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?').get(req.user.id, t.date);
-    if (!row) fail('You need to check in first');
-    if (row.check_out_time) fail('You already checked out today', 409);
-    db.prepare('UPDATE attendance SET check_out_time = ?, check_out_at = ? WHERE id = ?').run(
-      t.time,
-      now().toISOString(),
-      row.id,
+  app.post('/api/me/check-out', requireEmployee, async (req, res) => {
+    const t = localToday(await settings());
+    const row = await db.get(
+      `UPDATE attendance SET check_out_time = ?, check_out_at = ?
+       WHERE user_id = ? AND work_date = ? AND check_out_time IS NULL RETURNING *`,
+      [t.time, now().toISOString(), req.user.id, t.date],
     );
-    res.json({ attendance: db.prepare('SELECT * FROM attendance WHERE id = ?').get(row.id) });
+    if (!row) {
+      const existing = await db.get('SELECT 1 FROM attendance WHERE user_id = ? AND work_date = ?', [req.user.id, t.date]);
+      fail(existing ? 'You already checked out today' : 'You need to check in first', existing ? 409 : 400);
+    }
+    res.json({ attendance: row });
   });
 
   // Spend 1 green point to cancel 1 red penalty from the current month.
-  app.post('/api/me/redeem', requireEmployee, (req, res) => {
-    const t = today();
-    tx(db, () => {
-      const b = balances(db, req.user.id, t.date.slice(0, 7));
+  app.post('/api/me/redeem', requireEmployee, async (req, res) => {
+    const t = localToday(await settings());
+    await db.tx(async (tx) => {
+      await lockUser(tx, req.user.id);
+      const b = await balances(tx, req.user.id, t.date.slice(0, 7));
       if (b.green < 1) fail('Not enough green points');
       if (b.month.red < 1) fail('No red penalties this month');
       const reason = 'Used 1 green point to remove 1 red penalty';
-      addPoints(db, { userId: req.user.id, kind: 'green', delta: -1, workDate: t.date, source: 'redeem', reason });
-      addPoints(db, { userId: req.user.id, kind: 'red', delta: -1, workDate: t.date, source: 'redeem', reason });
+      await addPoints(tx, { userId: req.user.id, kind: 'green', delta: -1, workDate: t.date, source: 'redeem', reason });
+      await addPoints(tx, { userId: req.user.id, kind: 'red', delta: -1, workDate: t.date, source: 'redeem', reason });
     });
     res.json({ ok: true });
   });
 
-  app.get('/api/me/history', requireEmployee, (req, res) => {
-    const month = isMonth(req.query.month) ? req.query.month : today().date.slice(0, 7);
-    res.json(historyFor(req.user.id, month));
+  app.get('/api/me/history', requireEmployee, async (req, res) => {
+    const month = isMonth(req.query.month) ? req.query.month : localToday(await settings()).date.slice(0, 7);
+    res.json(await historyFor(req.user.id, month));
   });
 
-  app.get('/api/me/leaves', requireEmployee, (req, res) => {
-    res.json(db.prepare('SELECT * FROM leave_requests WHERE user_id = ? ORDER BY id DESC LIMIT 100').all(req.user.id));
+  app.get('/api/me/leaves', requireEmployee, async (req, res) => {
+    res.json(await db.all('SELECT * FROM leave_requests WHERE user_id = ? ORDER BY id DESC LIMIT 100', [req.user.id]));
   });
 
-  app.post('/api/me/leaves', requireEmployee, (req, res) => {
+  app.post('/api/me/leaves', requireEmployee, async (req, res) => {
     const { from_date: from, to_date: to } = req.body;
     if (!isDate(from) || !isDate(to)) fail('Choose start and end dates');
     if (to < from) fail('End date must be on or after start date');
     if (eachDate(from, to).length > 60) fail('Leave can be at most 60 days');
-    const info = db
-      .prepare('INSERT INTO leave_requests (user_id, from_date, to_date, reason) VALUES (?, ?, ?, ?)')
-      .run(req.user.id, from, to, str(req.body.reason, 500) || null);
-    res.status(201).json(db.prepare('SELECT * FROM leave_requests WHERE id = ?').get(info.lastInsertRowid));
+    const row = await db.get(
+      'INSERT INTO leave_requests (user_id, from_date, to_date, reason) VALUES (?, ?, ?, ?) RETURNING *',
+      [req.user.id, from, to, str(req.body.reason, 500) || null],
+    );
+    res.status(201).json(row);
   });
 
-  app.post('/api/me/leaves/:id/cancel', requireEmployee, (req, res) => {
-    const info = db
-      .prepare(`UPDATE leave_requests SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'pending'`)
-      .run(req.params.id, req.user.id);
+  app.post('/api/me/leaves/:id/cancel', requireEmployee, async (req, res) => {
+    const info = await db.run(
+      `UPDATE leave_requests SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'pending'`,
+      [idParam(req), req.user.id],
+    );
     if (!info.changes) fail('Request not found or no longer pending', 404);
     res.json({ ok: true });
   });
 
-  app.get('/api/me/rewards', requireEmployee, (req, res) => {
-    res.json(db.prepare('SELECT * FROM reward_requests WHERE user_id = ? ORDER BY id DESC LIMIT 100').all(req.user.id));
+  app.get('/api/me/rewards', requireEmployee, async (req, res) => {
+    res.json(await db.all('SELECT * FROM reward_requests WHERE user_id = ? ORDER BY id DESC LIMIT 100', [req.user.id]));
   });
 
   // Points are reserved (deducted) when the request is made and refunded if it's rejected or cancelled.
-  app.post('/api/me/rewards', requireEmployee, (req, res) => {
-    const s = settings();
-    const t = today();
+  app.post('/api/me/rewards', requireEmployee, async (req, res) => {
+    const s = await settings();
+    const t = localToday(s);
     const points = posInt(req.body.points);
     const method = req.body.method;
     const number = str(req.body.payout_number, 40);
@@ -269,83 +294,92 @@ function createApp(db, { now = () => new Date() } = {}) {
     if (points < s.min_reward_points) fail(`Minimum reward request is ${s.min_reward_points} points`);
     if (!PAYOUT_METHODS.includes(method)) fail('Choose a payout method');
     if (method !== 'cash' && !/^[0-9+\s@._a-zA-Z-]{4,40}$/.test(number)) fail('Enter your wallet number / InstaPay address');
-    const row = tx(db, () => {
-      if (balances(db, req.user.id, t.date.slice(0, 7)).green < points) fail('Not enough green points');
-      const info = db
-        .prepare('INSERT INTO reward_requests (user_id, points, amount, method, payout_number) VALUES (?, ?, ?, ?, ?)')
-        .run(req.user.id, points, points * s.green_value, method, number || null);
-      const id = Number(info.lastInsertRowid);
-      addPoints(db, {
+    const row = await db.tx(async (tx) => {
+      await lockUser(tx, req.user.id);
+      if ((await balances(tx, req.user.id, t.date.slice(0, 7))).green < points) fail('Not enough green points');
+      const r = await tx.get(
+        'INSERT INTO reward_requests (user_id, points, amount, method, payout_number) VALUES (?, ?, ?, ?, ?) RETURNING *',
+        [req.user.id, points, points * s.green_value, method, number || null],
+      );
+      await addPoints(tx, {
         userId: req.user.id, kind: 'green', delta: -points, workDate: t.date,
-        source: 'reward', reason: 'Reward request', refId: id,
+        source: 'reward', reason: 'Reward request', refId: r.id,
       });
-      return db.prepare('SELECT * FROM reward_requests WHERE id = ?').get(id);
+      return r;
     });
     res.status(201).json(row);
   });
 
-  app.post('/api/me/rewards/:id/cancel', requireEmployee, (req, res) => {
-    tx(db, () => {
-      const r = db
-        .prepare(`SELECT * FROM reward_requests WHERE id = ? AND user_id = ? AND status = 'pending'`)
-        .get(req.params.id, req.user.id);
+  app.post('/api/me/rewards/:id/cancel', requireEmployee, async (req, res) => {
+    const s = await settings();
+    await db.tx(async (tx) => {
+      const r = await tx.get(
+        `UPDATE reward_requests SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'pending' RETURNING *`,
+        [idParam(req), req.user.id],
+      );
       if (!r) fail('Request not found or no longer pending', 404);
-      db.prepare(`UPDATE reward_requests SET status = 'cancelled' WHERE id = ?`).run(r.id);
-      refundReward(r, null);
+      await refundReward(tx, s, r, null);
     });
     res.json({ ok: true });
   });
 
   // ---------- Owner ----------
 
-  app.get('/api/admin/overview', requireOwner, (req, res) => {
-    const s = settings();
-    const t = today();
+  app.get('/api/admin/overview', requireOwner, async (req, res) => {
+    const s = await settings();
+    await maybeRunAbsences(s);
+    const t = localToday(s);
     const date = isDate(req.query.date) ? req.query.date : t.date;
-    const rows = db
-      .prepare(
+    const [rows, leaves, pending] = await Promise.all([
+      db.all(
         `SELECT u.id, u.name, u.job_title, u.start_date, a.check_in_time, a.check_out_time, a.status, a.distance_m
          FROM users u LEFT JOIN attendance a ON a.user_id = u.id AND a.work_date = ?
          WHERE u.role = 'employee' AND u.active = 1 ORDER BY a.check_in_time IS NULL, a.check_in_time, u.name`,
-      )
-      .all(date);
+        [date],
+      ),
+      db.all(`SELECT user_id FROM leave_requests WHERE status = 'approved' AND ? BETWEEN from_date AND to_date`, [date]),
+      db.get(
+        `SELECT (SELECT COUNT(*) FROM leave_requests WHERE status = 'pending') AS leaves,
+                (SELECT COUNT(*) FROM reward_requests WHERE status = 'pending') AS rewards`,
+      ),
+    ]);
+    const onLeave = new Set(leaves.map((l) => l.user_id));
     const closed = date < t.date || (date === t.date && toMinutes(t.time) >= toMinutes(s.close));
     for (const r of rows) {
       if (r.status) continue;
       if (date < r.start_date) r.status = 'not_started';
-      else if (hasApprovedLeave(db, r.id, date)) r.status = 'leave';
+      else if (onLeave.has(r.id)) r.status = 'leave';
       else if (!isWorkDay(date, s)) r.status = 'off_day';
       else r.status = closed ? 'absent' : 'waiting';
     }
-    const count = (sql) => db.prepare(sql).get().n;
     res.json({
       date,
       now: t,
       work_day: isWorkDay(date, s),
       rows,
-      pending: {
-        leaves: count(`SELECT COUNT(*) AS n FROM leave_requests WHERE status = 'pending'`),
-        rewards: count(`SELECT COUNT(*) AS n FROM reward_requests WHERE status = 'pending'`),
-      },
+      pending: { leaves: Number(pending.leaves), rewards: Number(pending.rewards) },
       rules: pickRules(s),
     });
   });
 
-  app.get('/api/admin/users', requireOwner, (req, res) => {
-    const month = today().date.slice(0, 7);
-    const users = db
-      .prepare(
+  app.get('/api/admin/users', requireOwner, async (req, res) => {
+    const month = localToday(await settings()).date.slice(0, 7);
+    const [users, bal] = await Promise.all([
+      db.all(
         `SELECT id, name, username, role, phone, job_title, active, start_date, created_at
          FROM users ORDER BY role DESC, active DESC, name`,
-      )
-      .all();
-    for (const u of users) if (u.role === 'employee') u.balances = balances(db, u.id, month);
+      ),
+      balancesByUser(db, month),
+    ]);
+    for (const u of users) {
+      if (u.role === 'employee') u.balances = bal.get(u.id) || { green: 0, month: { green: 0, red: 0, black: 0 } };
+    }
     res.json(users);
   });
 
-  app.post('/api/admin/users', requireOwner, (req, res) => {
-    const s = settings();
-    const t = today();
+  app.post('/api/admin/users', requireOwner, async (req, res) => {
+    const s = await settings();
+    const t = localToday(s);
     const name = str(req.body.name, 80);
     const username = str(req.body.username, 40);
     const password = typeof req.body.password === 'string' ? req.body.password : '';
@@ -355,19 +389,20 @@ function createApp(db, { now = () => new Date() } = {}) {
     // Absences start counting today, or tomorrow if today's check-in window has already closed.
     const defaultStart = toMinutes(t.time) >= toMinutes(s.close) ? addDays(t.date, 1) : t.date;
     const startDate = isDate(req.body.start_date) ? req.body.start_date : defaultStart;
-    if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) fail('Username already exists', 409);
-    const info = db
-      .prepare(
-        `INSERT INTO users (name, username, password_hash, role, phone, job_title, start_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(name, username, auth.hashPassword(password), role, str(req.body.phone, 30) || null,
-        str(req.body.job_title, 80) || null, startDate);
-    res.status(201).json({ id: Number(info.lastInsertRowid) });
+    if (await db.get('SELECT 1 FROM users WHERE lower(username) = lower(?)', [username])) {
+      fail('Username already exists', 409);
+    }
+    const row = await db.get(
+      `INSERT INTO users (name, username, password_hash, role, phone, job_title, start_date)
+       VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      [name, username, auth.hashPassword(password), role, str(req.body.phone, 30) || null,
+        str(req.body.job_title, 80) || null, startDate],
+    );
+    res.status(201).json({ id: row.id });
   });
 
-  app.patch('/api/admin/users/:id', requireOwner, (req, res) => {
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  app.patch('/api/admin/users/:id', requireOwner, async (req, res) => {
+    const user = await db.get('SELECT * FROM users WHERE id = ?', [idParam(req)]);
     if (!user) fail('User not found', 404);
     const b = req.body;
     const fields = {};
@@ -385,24 +420,24 @@ function createApp(db, { now = () => new Date() } = {}) {
     }
     const keys = Object.keys(fields);
     if (keys.length) {
-      db.prepare(`UPDATE users SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(
+      await db.run(`UPDATE users SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [
         ...keys.map((k) => fields[k]),
         user.id,
-      );
+      ]);
     }
-    if (fields.password_hash || fields.active === 0) {
-      db.prepare('DELETE FROM sessions WHERE user_id = ? AND user_id != ?').run(user.id, req.user.id);
+    if ((fields.password_hash || fields.active === 0) && user.id !== req.user.id) {
+      await db.run('DELETE FROM sessions WHERE user_id = ?', [user.id]);
     }
     res.json({ ok: true });
   });
 
-  app.get('/api/admin/users/:id/history', requireOwner, (req, res) => {
-    const month = isMonth(req.query.month) ? req.query.month : today().date.slice(0, 7);
-    res.json(historyFor(Number(req.params.id), month));
+  app.get('/api/admin/users/:id/history', requireOwner, async (req, res) => {
+    const month = isMonth(req.query.month) ? req.query.month : localToday(await settings()).date.slice(0, 7);
+    res.json(await historyFor(idParam(req), month));
   });
 
-  app.post('/api/admin/points', requireOwner, (req, res) => {
-    const t = today();
+  app.post('/api/admin/points', requireOwner, async (req, res) => {
+    const t = localToday(await settings());
     const userId = posInt(req.body.user_id);
     const kind = req.body.kind;
     const delta = Number(req.body.delta);
@@ -411,120 +446,122 @@ function createApp(db, { now = () => new Date() } = {}) {
     if (!['green', 'red', 'black'].includes(kind)) fail('Choose a point type');
     if (!Number.isInteger(delta) || delta === 0 || Math.abs(delta) > 100) fail('Points must be a whole number between -100 and 100');
     if (!reason) fail('Reason is required');
-    tx(db, () => {
-      const user = db.prepare(`SELECT id FROM users WHERE id = ? AND role = 'employee'`).get(userId);
-      if (!user) fail('Employee not found', 404);
-      if (kind === 'green' && delta < 0 && balances(db, userId, t.date.slice(0, 7)).green + delta < 0) {
+    await db.tx(async (tx) => {
+      if (!userId || !(await lockUser(tx, userId))) fail('Employee not found', 404);
+      if (kind === 'green' && delta < 0 && (await balances(tx, userId, t.date.slice(0, 7))).green + delta < 0) {
         fail('Green balance cannot go below zero');
       }
-      addPoints(db, { userId, kind, delta, workDate, source: 'manual', reason, createdBy: req.user.id });
+      await addPoints(tx, { userId, kind, delta, workDate, source: 'manual', reason, createdBy: req.user.id });
     });
     res.status(201).json({ ok: true });
   });
 
-  app.get('/api/admin/points', requireOwner, (req, res) => {
+  app.get('/api/admin/points', requireOwner, async (req, res) => {
     const userId = posInt(req.query.user_id);
-    const rows = db
-      .prepare(
-        `SELECT p.*, u.name AS user_name, c.name AS created_by_name
-         FROM points p JOIN users u ON u.id = p.user_id LEFT JOIN users c ON c.id = p.created_by
-         WHERE (? IS NULL OR p.user_id = ?) ORDER BY p.id DESC LIMIT 200`,
-      )
-      .all(userId, userId);
+    const rows = await db.all(
+      `SELECT p.*, u.name AS user_name, c.name AS created_by_name
+       FROM points p JOIN users u ON u.id = p.user_id LEFT JOIN users c ON c.id = p.created_by
+       WHERE (?::int IS NULL OR p.user_id = ?::int) ORDER BY p.id DESC LIMIT 200`,
+      [userId, userId],
+    );
     res.json(rows);
   });
 
   // Manual attendance, e.g. when an employee's GPS failed. Clears that day's automatic absence.
-  app.post('/api/admin/attendance', requireOwner, (req, res) => {
+  app.post('/api/admin/attendance', requireOwner, async (req, res) => {
+    const t = localToday(await settings());
     const userId = posInt(req.body.user_id);
     const { work_date: date, time, status } = req.body;
     if (!isDate(date) || !isTime(time)) fail('Enter date and time');
     if (!['early', 'on_time', 'late', 'very_late', 'off_day'].includes(status)) fail('Choose a status');
-    if (date > today().date) fail('Cannot record attendance for a future date');
-    tx(db, () => {
-      if (!db.prepare(`SELECT 1 FROM users WHERE id = ? AND role = 'employee'`).get(userId)) fail('Employee not found', 404);
-      if (db.prepare('SELECT 1 FROM attendance WHERE user_id = ? AND work_date = ?').get(userId, date)) {
+    if (date > t.date) fail('Cannot record attendance for a future date');
+    await db.tx(async (tx) => {
+      if (!userId || !(await lockUser(tx, userId))) fail('Employee not found', 404);
+      if (await tx.get('SELECT 1 FROM attendance WHERE user_id = ? AND work_date = ?', [userId, date])) {
         fail('Attendance already recorded for that day', 409);
       }
-      db.prepare(
+      await tx.run(
         `INSERT INTO attendance (user_id, work_date, check_in_time, check_in_at, status) VALUES (?, ?, ?, ?, ?)`,
-      ).run(userId, date, time, now().toISOString(), status);
-      db.prepare(`DELETE FROM points WHERE user_id = ? AND work_date = ? AND source = 'absent'`).run(userId, date);
+        [userId, date, time, now().toISOString(), status],
+      );
+      await tx.run(`DELETE FROM points WHERE user_id = ? AND work_date = ? AND source = 'absent'`, [userId, date]);
     });
     res.status(201).json({ ok: true });
   });
 
-  app.get('/api/admin/leaves', requireOwner, (req, res) => {
+  app.get('/api/admin/leaves', requireOwner, async (req, res) => {
     const status = ['pending', 'approved', 'rejected', 'cancelled'].includes(req.query.status) ? req.query.status : null;
     res.json(
-      db
-        .prepare(
-          `SELECT l.*, u.name AS user_name FROM leave_requests l JOIN users u ON u.id = l.user_id
-           WHERE (? IS NULL OR l.status = ?) ORDER BY l.status = 'pending' DESC, l.id DESC LIMIT 200`,
-        )
-        .all(status, status),
+      await db.all(
+        `SELECT l.*, u.name AS user_name FROM leave_requests l JOIN users u ON u.id = l.user_id
+         WHERE (?::text IS NULL OR l.status = ?::text) ORDER BY l.status = 'pending' DESC, l.id DESC LIMIT 200`,
+        [status, status],
+      ),
     );
   });
 
-  app.post('/api/admin/leaves/:id/decision', requireOwner, (req, res) => {
+  app.post('/api/admin/leaves/:id/decision', requireOwner, async (req, res) => {
     const decision = req.body.decision;
     if (!['approve', 'reject'].includes(decision)) fail('Invalid decision');
-    tx(db, () => {
-      const l = db.prepare(`SELECT * FROM leave_requests WHERE id = ? AND status = 'pending'`).get(req.params.id);
-      if (!l) fail('Request not found or already decided', 404);
-      db.prepare(`UPDATE leave_requests SET status = ?, decided_by = ?, decided_at = datetime('now') WHERE id = ?`).run(
-        decision === 'approve' ? 'approved' : 'rejected',
-        req.user.id,
-        l.id,
+    await db.tx(async (tx) => {
+      const l = await tx.get(
+        `UPDATE leave_requests SET status = ?, decided_by = ?, decided_at = now()
+         WHERE id = ? AND status = 'pending' RETURNING *`,
+        [decision === 'approve' ? 'approved' : 'rejected', req.user.id, idParam(req)],
       );
+      if (!l) fail('Request not found or already decided', 404);
       if (decision === 'approve') {
         // Approved leave cancels absences already recorded for those days.
-        db.prepare(
-          `DELETE FROM points WHERE user_id = ? AND source = 'absent' AND work_date BETWEEN ? AND ?`,
-        ).run(l.user_id, l.from_date, l.to_date);
+        await tx.run(`DELETE FROM points WHERE user_id = ? AND source = 'absent' AND work_date BETWEEN ? AND ?`, [
+          l.user_id,
+          l.from_date,
+          l.to_date,
+        ]);
       }
     });
     res.json({ ok: true });
   });
 
-  app.get('/api/admin/rewards', requireOwner, (req, res) => {
+  app.get('/api/admin/rewards', requireOwner, async (req, res) => {
     const status = ['pending', 'paid', 'rejected', 'cancelled'].includes(req.query.status) ? req.query.status : null;
     res.json(
-      db
-        .prepare(
-          `SELECT r.*, u.name AS user_name FROM reward_requests r JOIN users u ON u.id = r.user_id
-           WHERE (? IS NULL OR r.status = ?) ORDER BY r.status = 'pending' DESC, r.id DESC LIMIT 200`,
-        )
-        .all(status, status),
+      await db.all(
+        `SELECT r.*, u.name AS user_name FROM reward_requests r JOIN users u ON u.id = r.user_id
+         WHERE (?::text IS NULL OR r.status = ?::text) ORDER BY r.status = 'pending' DESC, r.id DESC LIMIT 200`,
+        [status, status],
+      ),
     );
   });
 
-  app.post('/api/admin/rewards/:id/decision', requireOwner, (req, res) => {
+  app.post('/api/admin/rewards/:id/decision', requireOwner, async (req, res) => {
     const decision = req.body.decision;
     if (!['paid', 'reject'].includes(decision)) fail('Invalid decision');
-    tx(db, () => {
-      const r = db.prepare(`SELECT * FROM reward_requests WHERE id = ? AND status = 'pending'`).get(req.params.id);
-      if (!r) fail('Request not found or already decided', 404);
-      db.prepare(`UPDATE reward_requests SET status = ?, decided_by = ?, decided_at = datetime('now') WHERE id = ?`).run(
-        decision === 'paid' ? 'paid' : 'rejected',
-        req.user.id,
-        r.id,
+    const s = await settings();
+    await db.tx(async (tx) => {
+      const r = await tx.get(
+        `UPDATE reward_requests SET status = ?, decided_by = ?, decided_at = now()
+         WHERE id = ? AND status = 'pending' RETURNING *`,
+        [decision === 'paid' ? 'paid' : 'rejected', req.user.id, idParam(req)],
       );
-      if (decision === 'reject') refundReward(r, req.user.id);
+      if (!r) fail('Request not found or already decided', 404);
+      if (decision === 'reject') await refundReward(tx, s, r, req.user.id);
     });
     res.json({ ok: true });
   });
 
-  app.get('/api/admin/report', requireOwner, (req, res) => {
-    runAbsenceJob(db, settings(), now());
-    const month = isMonth(req.query.month) ? req.query.month : today().date.slice(0, 7);
-    res.json({ month, rows: monthReport(db, settings(), month) });
+  async function reportFor(req) {
+    const s = await settings();
+    await runAbsenceJob(db, s, now());
+    const month = isMonth(req.query.month) ? req.query.month : localToday(s).date.slice(0, 7);
+    return { month, rows: await monthReport(db, s, month) };
+  }
+
+  app.get('/api/admin/report', requireOwner, async (req, res) => {
+    res.json(await reportFor(req));
   });
 
-  app.get('/api/admin/report.csv', requireOwner, (req, res) => {
-    runAbsenceJob(db, settings(), now());
-    const month = isMonth(req.query.month) ? req.query.month : today().date.slice(0, 7);
-    const rows = monthReport(db, settings(), month);
+  app.get('/api/admin/report.csv', requireOwner, async (req, res) => {
+    const { month, rows } = await reportFor(req);
     const header = [
       'Name', 'Job title', 'Days present', 'Early', 'On time', 'Late', 'Leave days',
       'Green (month)', 'Green balance', 'Red', 'Black (absences)', 'Red deduction', 'Black deduction', 'Total deduction',
@@ -543,35 +580,31 @@ function createApp(db, { now = () => new Date() } = {}) {
     res.send(`﻿${csv}`);
   });
 
-  app.get('/api/admin/settings', requireOwner, (req, res) => res.json(settings()));
+  app.get('/api/admin/settings', requireOwner, async (req, res) => res.json(await settings()));
 
-  app.put('/api/admin/settings', requireOwner, (req, res) => {
-    const next = validateSettings({ ...settings(), ...req.body });
-    saveSettings(db, next);
+  app.put('/api/admin/settings', requireOwner, async (req, res) => {
+    const next = validateSettings({ ...(await settings()), ...req.body });
+    await saveSettings(db, next);
     res.json(next);
   });
 
   // ---------- Helpers ----------
 
-  function refundReward(r, by) {
-    addPoints(db, {
-      userId: r.user_id, kind: 'green', delta: r.points, workDate: today().date,
+  function refundReward(tx, s, r, by) {
+    return addPoints(tx, {
+      userId: r.user_id, kind: 'green', delta: r.points, workDate: localToday(s).date,
       source: 'reward_refund', reason: 'Reward request refund', refId: r.id, createdBy: by,
     });
   }
 
-  function historyFor(userId, month) {
+  async function historyFor(userId, month) {
     const like = `${month}-%`;
-    return {
-      month,
-      attendance: db
-        .prepare('SELECT * FROM attendance WHERE user_id = ? AND work_date LIKE ? ORDER BY work_date DESC')
-        .all(userId, like),
-      points: db
-        .prepare('SELECT * FROM points WHERE user_id = ? AND work_date LIKE ? ORDER BY id DESC')
-        .all(userId, like),
-      balances: balances(db, userId, month),
-    };
+    const [attendance, points, b] = await Promise.all([
+      db.all('SELECT * FROM attendance WHERE user_id = ? AND work_date LIKE ? ORDER BY work_date DESC', [userId, like]),
+      db.all('SELECT * FROM points WHERE user_id = ? AND work_date LIKE ? ORDER BY id DESC', [userId, like]),
+      balances(db, userId, month),
+    ]);
+    return { month, attendance, points, balances: b };
   }
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
@@ -579,6 +612,7 @@ function createApp(db, { now = () => new Date() } = {}) {
   app.use((err, req, res, next) => {
     if (err instanceof RuleError) return res.status(err.status).json({ error: err.message });
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON' });
+    if (err.code === '23505') return res.status(409).json({ error: 'That record already exists' });
     console.error(err);
     res.status(500).json({ error: 'Server error' });
   });

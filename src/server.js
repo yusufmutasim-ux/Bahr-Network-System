@@ -1,17 +1,16 @@
+// Local / traditional server. Uses DATABASE_URL if set, otherwise an embedded Postgres (PGlite) in ./data.
 const path = require('node:path');
-const { openDb, getSettings } = require('./db');
+const { connect, getSettings } = require('./db');
 const { createApp } = require('./app');
 const { runAbsenceJob } = require('./logic');
 
 const PORT = Number(process.env.PORT) || 3000;
-const DB_FILE = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'bahr.db');
-
-const db = openDb(DB_FILE);
+const db = connect(undefined, { pgliteDir: process.env.PGLITE_DIR || path.join(__dirname, '..', 'data', 'pglite') });
 const app = createApp(db);
 
-function absenceTick() {
+async function absenceTick() {
   try {
-    const added = runAbsenceJob(db, getSettings(db));
+    const added = await runAbsenceJob(db, await getSettings(db));
     if (added) console.log(`[absence] recorded ${added} black point(s)`);
   } catch (err) {
     console.error('[absence] failed', err);

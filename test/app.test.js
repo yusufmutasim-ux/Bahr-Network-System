@@ -1,9 +1,8 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { openDb } = require('../src/db');
+const { connect, getSettings } = require('../src/db');
 const { createApp } = require('../src/app');
 const { runAbsenceJob, classifyCheckIn, distanceMeters } = require('../src/logic');
-const { getSettings } = require('../src/db');
 
 // Office at a fixed point; "near" is ~50 m away, "far" is ~1.1 km away.
 const OFFICE = { lat: 27.9158, lng: 34.33 };
@@ -45,16 +44,23 @@ const emp = client();
 let empId;
 
 before(async () => {
-  db = openDb(':memory:');
+  // Uses embedded PGlite by default; set TEST_DATABASE_URL to run against a real (empty) Postgres.
+  delete process.env.DATABASE_URL;
+  delete process.env.POSTGRES_URL;
+  db = connect(process.env.TEST_DATABASE_URL);
+  await db.ready;
   const app = createApp(db, { now: () => clock });
   await new Promise((r) => (server = app.listen(0, r)));
   base = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => server.close());
+after(async () => {
+  server.close();
+  await db.close();
+});
 
-test('pure rules', () => {
-  const s = getSettings(db);
+test('pure rules', async () => {
+  const s = await getSettings(db);
   assert.equal(classifyCheckIn('07:30', s).status, 'early');
   assert.equal(classifyCheckIn('09:59', s).status, 'on_time');
   assert.deepEqual(classifyCheckIn('10:30', s), { status: 'late', green: 0, red: 1 });
@@ -67,7 +73,7 @@ test('pure rules', () => {
 test('setup, settings and staff', async () => {
   assert.equal((await owner('/setup')).body.needsSetup, true);
   assert.equal((await owner('/setup', { method: 'POST', body: { name: 'Boss', username: 'boss', password: 'secret1' } })).status, 201);
-  assert.equal((await owner('/setup', { method: 'POST', body: { name: 'X', username: 'x', password: 'secret1' } })).status, 409);
+  assert.equal((await owner('/setup', { method: 'POST', body: { name: 'X', username: 'xyz', password: 'secret1' } })).status, 409);
   const s = (await owner('/admin/settings')).body;
   const put = await owner('/admin/settings', { method: 'PUT', body: { ...s, office_lat: OFFICE.lat, office_lng: OFFICE.lng } });
   assert.equal(put.status, 200);
@@ -114,11 +120,11 @@ test('absences become black points unless leave is approved', async () => {
   const leave = await emp('/me/leaves', { method: 'POST', body: { from_date: '2026-01-07', to_date: '2026-01-07', reason: 'Sick leave' } });
   assert.equal(leave.status, 201);
   clock = cairo('2026-01-08', '12:30');
-  const s = getSettings(db);
-  assert.equal(runAbsenceJob(db, s, clock), 3); // 6th, 7th (leave still pending), 8th
-  assert.equal(runAbsenceJob(db, s, clock), 0); // idempotent
+  const s = await getSettings(db);
+  assert.equal(await runAbsenceJob(db, s, clock), 3); // 6th, 7th (leave still pending), 8th
+  assert.equal(await runAbsenceJob(db, s, clock), 0); // idempotent
   assert.equal((await owner(`/admin/leaves/${leave.body.id}/decision`, { method: 'POST', body: { decision: 'approve' } })).status, 200);
-  assert.equal(runAbsenceJob(db, s, clock), 0);
+  assert.equal(await runAbsenceJob(db, s, clock), 0);
   const d = (await emp('/me/dashboard')).body;
   assert.equal(d.balances.month.black, 2);
   assert.equal(d.deductions.total, 2000);
@@ -131,7 +137,7 @@ test('absences become black points unless leave is approved', async () => {
   assert.equal(rep.total_deduction, 1000);
   // Friday Jan 9 is not a work day: no black.
   clock = cairo('2026-01-10', '07:10');
-  assert.equal(runAbsenceJob(db, s, clock), 0);
+  assert.equal(await runAbsenceJob(db, s, clock), 0);
 });
 
 test('owner adjusts points and reward requests reserve/refund points', async () => {
@@ -147,6 +153,15 @@ test('owner adjusts points and reward requests reserve/refund points', async () 
   assert.equal((await emp('/me/dashboard')).body.balances.green, 12);
   const csv = await owner('/admin/report.csv?month=2026-01');
   assert.match(csv.body, /Total deduction/);
+});
+
+test('concurrent check-ins only record one', async () => {
+  const c = client();
+  await owner('/admin/users', { method: 'POST', body: { name: 'Race', username: 'race', password: 'pass123' } });
+  await c('/login', { method: 'POST', body: { username: 'race', password: 'pass123' } });
+  clock = cairo('2026-01-11', '09:00');
+  const results = await Promise.all([1, 2, 3].map(() => c('/me/check-in', { method: 'POST', body: NEAR })));
+  assert.deepEqual(results.map((r) => r.status).sort(), [201, 409, 409]);
 });
 
 test('rejects non-JSON writes', async () => {

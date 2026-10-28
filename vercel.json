@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "",
+  "outputDirectory": "public",
+  "rewrites": [{ "source": "/api/(.*)", "destination": "/api" }],
+  "crons": [{ "path": "/api/cron/absences", "schedule": "30 10 * * *" }]
+}
