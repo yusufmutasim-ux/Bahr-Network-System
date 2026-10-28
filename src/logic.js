@@ -43,7 +43,7 @@ function checkGeofence({ lat, lng, accuracy }, settings) {
   }
   if (![lat, lng].every(Number.isFinite)) throw new RuleError('Location (GPS) is required to check in.');
   if (Number.isFinite(accuracy) && accuracy > settings.max_accuracy_m) {
-    throw new RuleError(`GPS accuracy is too low (${Math.round(accuracy)} m). Try again outdoors or near a window.`);
+    throw new RuleError(`Your location is too imprecise (±${Math.round(accuracy)} m, allowed ±${settings.max_accuracy_m} m). Laptops locate themselves over Wi-Fi and are often imprecise: check in from your phone, or move near a window and try again.`);
   }
   const distance = distanceMeters(lat, lng, settings.office_lat, settings.office_lng);
   if (distance > settings.radius_m) {

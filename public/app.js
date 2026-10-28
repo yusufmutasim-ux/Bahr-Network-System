@@ -283,6 +283,14 @@ const UA = navigator.userAgent;
 const IS_IOS = /iPhone|iPad|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const IS_ANDROID = /Android/.test(UA);
 const IN_APP = /FBAN|FBAV|Instagram|Line\/|WhatsApp|Snapchat|TikTok|; wv\)/.test(UA);
+const IS_WINDOWS = /Windows/.test(UA);
+const IS_MAC = /Macintosh/.test(UA) && !IS_IOS;
+// Laptops have no GPS: the browser asks the OS, which must have location services switched on.
+const DESKTOP_OS_STEPS = IS_WINDOWS
+  ? ['Open Windows Settings → Privacy & security → Location.', 'Turn ON "Location services" and "Let apps access your location" (and "Let desktop apps access your location").', 'Make sure Wi-Fi is ON (laptops locate themselves using nearby Wi-Fi), then try again.']
+  : IS_MAC
+    ? ['Open System Settings → Privacy & Security → Location Services.', 'Turn Location Services ON, and ON for your browser (Chrome / Safari).', 'Make sure Wi-Fi is ON, then try again.']
+    : ['Turn on your computer\'s location services and Wi-Fi, then try again.'];
 
 function locationError(kind) {
   const steps = {
@@ -295,9 +303,11 @@ function locationError(kind) {
         ? ['Location is blocked for this site.', 'Turn on Location from the quick-settings panel (swipe down).', 'In Chrome tap the 🔒 icon next to the address → Permissions → Location → Allow.', 'Reload the page and try again.']
         : ['Location is blocked for this site.', 'Click the 🔒 / ⚙️ icon at the left of the address bar → Location → Allow.', 'Reload the page and try again.', 'On a computer you can also set the office from the map instead.'],
     unavailable: IS_IOS || IS_ANDROID
-      ? ["Your phone couldn't find its location.", 'Make sure Location / GPS is turned on.', 'Move near a window or outside, then try again.']
-      : ["This computer couldn't find its location (many PCs have no GPS).", 'Turn on Wi-Fi, or set the office by clicking it on the map / pasting a Google Maps link.'],
-    timeout: ['Finding your location took too long.', 'Move near a window or outside and try again.', 'Make sure Location / GPS is on.'],
+      ? ["Your phone couldn't find its location.", 'Make sure Location / GPS is turned on (swipe down → Location).', 'Move near a window or outside, then try again.']
+      : ["This computer couldn't find its location.", ...DESKTOP_OS_STEPS, 'Easiest option: check in from your phone, since phones have GPS.'],
+    timeout: IS_IOS || IS_ANDROID
+      ? ['Finding your location took too long.', 'Make sure Location / GPS is on, and for Android set Location → "Use precise location" ON.', 'Move near a window or outside and try again.']
+      : ["Your computer didn't return a location in time.", ...DESKTOP_OS_STEPS, 'Easiest option: check in from your phone, since phones have GPS.'],
   }[kind];
   const err = new Error(steps[0]);
   err.help = steps.slice(1);
@@ -312,32 +322,51 @@ function showLocationHelp(err) {
     title: 'Location needed 📍',
     sub: esc(err.message),
     body: `<ol class="grid" style="gap:10px;padding-left:20px;margin:0">${err.help.map((h) => `<li>${esc(h)}</li>`).join('')}</ol>`,
-    submit: 'Got it',
-    onSubmit: async () => {},
+    submit: err.retry ? 'Try again' : 'Got it',
+    onSubmit: async () => {
+      if (err.retry) setTimeout(err.retry, 150);
+    },
   });
 }
 
-// High-accuracy GPS first, then a quicker low-accuracy fix (Wi-Fi / cell) as a fallback.
-function getPosition() {
+// Asks for GPS (high accuracy) and network location (Wi-Fi/cell) at the same time and takes the
+// first fix, then waits a few seconds for a more precise one. A fix from the last 2 minutes is
+// accepted, so a recently-located device answers instantly.
+function getPosition({ timeout = 30000 } = {}) {
   if (!window.isSecureContext) return Promise.reject(locationError('insecure'));
   if (!navigator.geolocation) return Promise.reject(locationError(IN_APP ? 'inapp' : 'unsupported'));
-  const once = (opts) =>
-    new Promise((resolve, reject) =>
-      navigator.geolocation.getCurrentPosition(
-        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
-        reject,
-        opts,
-      ),
-    );
-  return once({ enableHighAccuracy: true, timeout: 15000, maximumAge: 0 })
-    .catch((e) => {
-      if (e.code === 1) throw e;
-      return once({ enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 });
-    })
-    .catch((e) => {
-      if (e.kind) throw e;
-      throw locationError(e.code === 1 ? (IN_APP ? 'inapp' : 'denied') : e.code === 3 ? 'timeout' : 'unavailable');
-    });
+  const geo = navigator.geolocation;
+  return new Promise((resolve, reject) => {
+    let best = null;
+    let lastErr = null;
+    let done = false;
+    let grace;
+    const timers = [];
+    const watchId = geo.watchPosition(onPos, onErr, { enableHighAccuracy: true, maximumAge: 0, timeout });
+    geo.getCurrentPosition(onPos, onErr, { enableHighAccuracy: false, maximumAge: 120000, timeout });
+    timers.push(setTimeout(() => (best ? finish(resolve, best) : finish(reject, mapErr(lastErr))), timeout + 1500));
+    function finish(fn, v) {
+      if (done) return;
+      done = true;
+      geo.clearWatch(watchId);
+      timers.forEach(clearTimeout);
+      clearTimeout(grace);
+      fn(v);
+    }
+    function onPos(p) {
+      const fix = { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy };
+      if (!best || fix.accuracy < best.accuracy) best = fix;
+      if (best.accuracy <= 40) finish(resolve, best);
+      else grace ||= setTimeout(() => finish(resolve, best), 5000);
+    }
+    function onErr(e) {
+      lastErr = e;
+      if (e.code === 1) finish(reject, mapErr(e));
+    }
+    function mapErr(e) {
+      return locationError(!e || e.code === 3 ? 'timeout' : e.code === 1 ? (IN_APP ? 'inapp' : 'denied') : 'unavailable');
+    }
+  });
 }
 
 // Leaflet (OpenStreetMap) is loaded only when a map is shown.
@@ -1284,7 +1313,13 @@ async function viewEmployeeHome() {
         const label = $('span', checkin);
         label.textContent = 'Getting your location…';
         try {
-          const pos = await getPosition();
+          let pos;
+          try {
+            pos = await getPosition();
+          } catch (err) {
+            err.retry = () => $('#checkin')?.click();
+            throw err;
+          }
           label.textContent = 'Checking in…';
           const res = await api('/me/check-in', { method: 'POST', body: pos });
           haptic([20, 30, 40]);
