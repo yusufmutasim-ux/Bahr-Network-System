@@ -878,10 +878,11 @@ const OWNER_NAV = [
   { key: 'staff', label: 'Staff profile', icon: 'user', view: (p) => viewStaffProfile(p), hidden: true },
   { key: 'person', label: 'Profile', icon: 'user', view: (p) => viewPerson(p), hidden: true },
 ];
+// Phones/tablets: four main tabs + "More" (everything else lives in a bottom sheet).
 const BOTTOM_LABEL = { '': 'Home', history: 'History', leaves: 'Leave', rewards: 'Rewards', leaderboard: 'Ranking', employees: 'Staff', reports: 'Report', wall: 'Wall', profile: 'Me' };
 const BOTTOM = {
-  employee: ['', 'wall', 'leaves', 'rewards', 'profile'],
-  owner: ['', 'employees', 'wall', 'leaves', 'reports'],
+  employee: ['', 'wall', 'leaves', 'rewards'],
+  owner: ['', 'employees', 'leaves', 'wall'],
 };
 
 const navItems = () => (me.role === 'owner' ? OWNER_NAV : EMPLOYEE_NAV);
@@ -925,10 +926,49 @@ function renderShell(active = parseHash().path) {
     <button class="icon-btn xs ghost" type="button" data-go="#/account" aria-label="Account">${icon('more')}</button>`;
 
   const bottom = BOTTOM[me.role].map((k) => routeFor(k));
+  const inMore = !BOTTOM[me.role].includes(active);
+  const moreCount = navItems().filter((n) => n.count && !BOTTOM[me.role].includes(n.key)).reduce((a, n) => a + n.count(), 0);
   $('#bottom-nav').className = 'bottom-nav on';
-  $('#bottom-nav').innerHTML = bottom
-    .map((n) => `<a href="#/${n.key}" class="${n.key === active ? 'active' : ''}">${icon(n.icon)}<span>${BOTTOM_LABEL[n.key]}</span></a>`)
-    .join('');
+  $('#bottom-nav').innerHTML = `${bottom
+    .map((n) => {
+      const c = n.count ? n.count() : 0;
+      return `<a href="#/${n.key}" class="${n.key === active ? 'active' : ''}">${icon(n.icon)}<span>${BOTTOM_LABEL[n.key]}</span>${c ? `<i class="nav-badge">${c}</i>` : ''}</a>`;
+    })
+    .join('')}<a href="#" data-more class="${inMore ? 'active' : ''}">${icon('menu')}<span>More</span>${moreCount ? `<i class="nav-badge">${moreCount}</i>` : ''}</a>`;
+}
+
+// "More" sheet: every page not in the bottom bar, plus account, search, theme and log out.
+function openMore() {
+  const dlg = $('#more');
+  const active = parseHash().path;
+  const items = navItems().filter((n) => n.view && !n.hidden && !BOTTOM[me.role].includes(n.key));
+  dlg.innerHTML = `<div class="card">
+    <div class="row" style="gap:12px;margin-bottom:16px">${avatar(me.name, 'lg')}
+      <div style="flex:1;min-width:0"><strong style="font-size:1.05rem">${esc(me.name)}</strong>
+        <div class="muted small">${me.role === 'owner' ? 'Owner' : esc(me.job_title || 'Staff')} · @${esc(me.username)}</div></div>
+      <button class="icon-btn ghost" type="button" data-close aria-label="Close">${icon('x')}</button></div>
+    <div class="more-grid">${items
+      .map((n) => {
+        const c = n.count ? n.count() : 0;
+        return `<a href="#/${n.key}" class="more-item ${n.key === active ? 'active' : ''}"><span class="ico">${icon(n.icon)}${c ? `<i class="nav-badge">${c}</i>` : ''}</span><span>${esc(n.label)}</span></a>`;
+      })
+      .join('')}</div>
+    <div class="list mt">
+      <a class="list-item more-row" href="#/account">${icon('user')}<div class="grow"><strong>Account</strong><span>Profile, notifications, password</span></div>${icon('arrow')}</a>
+      <button class="list-item more-row" type="button" data-more-act="search">${icon('search')}<div class="grow"><strong>Search</strong><span>Pages, people and actions</span></div></button>
+      <button class="list-item more-row" type="button" data-more-act="theme">${icon(isDark() ? 'sun' : 'moon')}<div class="grow"><strong>${isDark() ? 'Light mode' : 'Dark mode'}</strong><span>Switch appearance</span></div></button>
+      ${canInstall() ? `<button class="list-item more-row" type="button" data-more-act="install">📲<div class="grow"><strong>Install the app</strong><span>Add Bahr to your home screen</span></div></button>` : ''}
+      <button class="list-item more-row" type="button" data-more-act="logout" style="color:var(--red)">${icon('logout')}<div class="grow"><strong>Log out</strong></div></button>
+    </div></div>`;
+  $('[data-close]', dlg).onclick = () => dlg.close();
+  $$('a', dlg).forEach((a) => a.addEventListener('click', () => dlg.close()));
+  $$('[data-more-act]', dlg).forEach((b) => (b.onclick = () => {
+    dlg.close();
+    ({ search: openPalette, theme: toggleTheme, install: installApp, logout })[b.dataset.moreAct]();
+  }));
+  dlg.onclick = (e) => e.target === dlg && dlg.close();
+  dlg.showModal();
+  haptic(10);
 }
 
 function renderOnline(rows) {
@@ -942,6 +982,11 @@ function renderOnline(rows) {
 }
 
 document.addEventListener('click', (e) => {
+  const m = e.target.closest('[data-more]');
+  if (m) {
+    e.preventDefault();
+    return openMore();
+  }
   const k = e.target.closest('[data-kudos-to]');
   if (k) return kudosModal(Number(k.dataset.kudosTo) || null, k.dataset.kudosCat);
   const t = e.target.closest('[data-go],[data-palette],[data-theme-btn],[data-logout]');

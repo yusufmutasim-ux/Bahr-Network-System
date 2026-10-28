@@ -761,3 +761,28 @@ button, a, label, .tile, .chip { touch-action: manipulation; }
 }
 .m-sep { display: none; }
 @media (max-width: 640px) { #board .m-sep { display: inline; } }
+
+/* ============ Phones & tablets: bottom bar only (no sidebar) ============ */
+@media (max-width: 900px) {
+  .sidebar, .scrim, #menu-btn { display: none !important; }
+  .bottom-nav.on {
+    display: flex; position: fixed; z-index: 30; justify-content: space-around; gap: 2px;
+    bottom: calc(10px + env(safe-area-inset-bottom)); left: calc(10px + env(safe-area-inset-left)); right: calc(10px + env(safe-area-inset-right));
+    max-width: 560px; margin: 0 auto;
+    background: var(--surface); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+    border: 1px solid var(--line); border-radius: 26px; padding: 7px; box-shadow: var(--shadow-lg);
+  }
+  .bottom-nav a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 2px; border-radius: 18px; font-size: .68rem; font-weight: 700; color: var(--muted); text-decoration: none; position: relative; }
+  .bottom-nav a svg.i { width: 21px; height: 21px; }
+  .bottom-nav a.active { background: var(--pill); color: var(--pill-ink); }
+  .toasts { bottom: calc(92px + env(safe-area-inset-bottom)); }
+}
+.nav-badge { position: absolute; top: 3px; right: calc(50% - 22px); min-width: 17px; height: 17px; padding: 0 4px; border-radius: 99px; background: var(--red); color: #fff; font: 800 .62rem/17px inherit; text-align: center; font-style: normal; box-shadow: 0 0 0 2px var(--surface-solid); }
+.more-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.more-item { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 6px; border-radius: 20px; background: var(--sunken); text-decoration: none; color: var(--ink); font-weight: 700; font-size: .78rem; text-align: center; position: relative; }
+.more-item .ico { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-solid); box-shadow: var(--shadow); position: relative; }
+.more-item .ico .nav-badge { top: -4px; right: -6px; }
+.more-item.active { background: var(--pill); color: var(--pill-ink); }
+.more-item.active .ico { background: rgba(255, 255, 255, .14); color: var(--pill-ink); box-shadow: none; }
+.more-row { background: none; border: 0; width: 100%; text-align: left; cursor: pointer; color: inherit; text-decoration: none; font: inherit; }
+.more-row > svg:last-child { color: var(--muted); }
