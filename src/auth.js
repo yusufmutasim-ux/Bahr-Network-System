@@ -50,7 +50,7 @@ async function sessionUser(db, req) {
   const token = parseCookies(req.headers.cookie)[COOKIE];
   if (!token) return null;
   const row = await db.get(
-    `SELECT u.id, u.name, u.username, u.role, u.phone, u.job_title, u.active, u.start_date, u.created_at, s.token
+    `SELECT u.id, u.name, u.username, u.role, u.phone, u.job_title, u.active, u.start_date, u.created_at, u.department, u.birthday, u.remote_allowed, s.token
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token = ? AND s.expires_at > ?`,
     [token, Date.now()],

@@ -4,6 +4,7 @@ const { getSettings, saveSettings } = require('./db');
 const { localNow, addDays, toMinutes, eachDate, isDate, isTime, isMonth } = require('./time');
 const {
   RuleError,
+  distanceMeters,
   isWorkDay,
   classifyCheckIn,
   checkGeofence,
@@ -15,6 +16,7 @@ const {
   monthReport,
 } = require('./logic');
 const auth = require('./auth');
+const { registerCulture } = require('./culture');
 
 const PAYOUT_METHODS = ['instapay', 'vodafone_cash', 'cash'];
 const ABSENCE_JOB_INTERVAL_MS = 5 * 60 * 1000;
@@ -192,7 +194,17 @@ function createApp(db, { now = () => new Date() } = {}) {
     const lat = Number(req.body.lat);
     const lng = Number(req.body.lng);
     const accuracy = req.body.accuracy == null ? NaN : Number(req.body.accuracy);
-    const distance = checkGeofence({ lat, lng, accuracy }, s);
+    // Remote-enabled staff (shoots, client visits, WFH) skip the geofence; distance is still recorded.
+    const remote = !!req.user.remote_allowed;
+    let distance = null;
+    if (remote) {
+      if ([lat, lng].every(Number.isFinite) && s.office_lat != null) {
+        distance = Math.round(distanceMeters(lat, lng, s.office_lat, s.office_lng));
+      }
+    } else {
+      distance = checkGeofence({ lat, lng, accuracy }, s);
+    }
+    const mood = Number.isInteger(req.body.mood) && req.body.mood >= 1 && req.body.mood <= 5 ? req.body.mood : null;
     const result = isWorkDay(t.date, s) ? classifyCheckIn(t.time, s) : { status: 'off_day', green: 0, red: 0 };
     const record = await db.tx(async (tx) => {
       await lockUser(tx, req.user.id);
@@ -200,9 +212,10 @@ function createApp(db, { now = () => new Date() } = {}) {
         fail('You already checked in today', 409);
       }
       const row = await tx.get(
-        `INSERT INTO attendance (user_id, work_date, check_in_time, check_in_at, status, lat, lng, accuracy, distance_m)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-        [req.user.id, t.date, t.time, now().toISOString(), result.status, lat, lng, accuracy || null, distance],
+        `INSERT INTO attendance (user_id, work_date, check_in_time, check_in_at, status, lat, lng, accuracy, distance_m, mode, mood)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        [req.user.id, t.date, t.time, now().toISOString(), result.status, Number.isFinite(lat) ? lat : null,
+          Number.isFinite(lng) ? lng : null, accuracy || null, distance, remote ? 'remote' : 'office', mood],
       );
       if (result.green) {
         await addPoints(tx, {
@@ -333,7 +346,8 @@ function createApp(db, { now = () => new Date() } = {}) {
     const date = isDate(req.query.date) ? req.query.date : t.date;
     const [rows, leaves, pending] = await Promise.all([
       db.all(
-        `SELECT u.id, u.name, u.job_title, u.start_date, a.check_in_time, a.check_out_time, a.status, a.distance_m
+        `SELECT u.id, u.name, u.job_title, u.department, u.start_date, a.check_in_time, a.check_out_time, a.status,
+                a.distance_m, a.mood, a.mode
          FROM users u LEFT JOIN attendance a ON a.user_id = u.id AND a.work_date = ?
          WHERE u.role = 'employee' AND u.active = 1 ORDER BY a.check_in_time IS NULL, a.check_in_time, u.name`,
         [date],
@@ -355,21 +369,34 @@ function createApp(db, { now = () => new Date() } = {}) {
     }
     const trendFrom = addDays(date, -6);
     const trendRows = await db.all(
-      `SELECT work_date, COUNT(*) AS present, COUNT(*) FILTER (WHERE status IN ('late', 'very_late')) AS late,
+      `SELECT work_date, COUNT(*) AS present, COUNT(*) FILTER (WHERE status IN ('late', 'very_late')) AS late, AVG(mood) AS mood,
               COUNT(*) FILTER (WHERE status = 'early') AS early
        FROM attendance WHERE work_date BETWEEN ? AND ? GROUP BY work_date`,
       [trendFrom, date],
     );
     const trend = eachDate(trendFrom, date).map((d) => {
       const r = trendRows.find((x) => x.work_date === d) || {};
-      return { date: d, work_day: isWorkDay(d, s), present: Number(r.present || 0), late: Number(r.late || 0), early: Number(r.early || 0) };
+      return {
+        date: d, work_day: isWorkDay(d, s), present: Number(r.present || 0), late: Number(r.late || 0),
+        early: Number(r.early || 0), mood: r.mood == null ? null : Math.round(Number(r.mood) * 10) / 10,
+      };
     });
+    const moods = rows.filter((x) => x.mood);
+    const byDept = {};
+    for (const x of moods) (byDept[x.department || 'Other'] ||= []).push(x.mood);
+    const avg = (a) => Math.round((a.reduce((p, c) => p + c, 0) / a.length) * 10) / 10;
     res.json({
       date,
       now: t,
       work_day: isWorkDay(date, s),
       rows,
       trend,
+      mood: {
+        avg: moods.length ? avg(moods.map((x) => x.mood)) : null,
+        count: moods.length,
+        dist: [1, 2, 3, 4, 5].map((m) => moods.filter((x) => x.mood === m).length),
+        by_department: Object.entries(byDept).map(([department, m]) => ({ department, avg: avg(m), count: m.length })),
+      },
       pending: { leaves: Number(pending.leaves), rewards: Number(pending.rewards) },
       rules: pickRules(s),
     });
@@ -392,6 +419,9 @@ function createApp(db, { now = () => new Date() } = {}) {
          (SELECT 'points', p.user_id, u.name, p.kind, p.created_at, p.reason, p.delta
           FROM points p JOIN users u ON u.id = p.user_id WHERE p.source IN ('manual', 'absent', 'redeem')
           ORDER BY p.created_at DESC LIMIT 15)
+         UNION ALL
+         (SELECT 'kudos', k.from_user, f.name, k.category, k.created_at, t.name, NULL
+          FROM kudos k JOIN users f ON f.id = k.from_user JOIN users t ON t.id = k.to_user ORDER BY k.created_at DESC LIMIT 15)
        ) feed ORDER BY at DESC LIMIT 40`,
     );
     res.json(rows);
@@ -401,21 +431,41 @@ function createApp(db, { now = () => new Date() } = {}) {
   app.get('/api/leaderboard', requireUser, async (req, res) => {
     const s = await settings();
     const month = isMonth(req.query.month) ? req.query.month : localToday(s).date.slice(0, 7);
-    const rows = (await monthReport(db, s, month))
-      .filter((r) => r.active)
+    const report = (await monthReport(db, s, month)).filter((r) => r.active);
+    const rows = report
       .map((r) => ({
-        user_id: r.user_id, name: r.name, job_title: r.job_title, green: r.green_month, red: r.red,
+        user_id: r.user_id, name: r.name, job_title: r.job_title, department: r.department, green: r.green_month, red: r.red,
         black: r.black, early: r.early, days_present: r.days_present,
       }))
       .sort((a, b) => b.green - a.green || a.red + a.black * 2 - (b.red + b.black * 2) || b.days_present - a.days_present);
-    res.json({ month, rows });
+    // Department battle: average score per member so small teams can win too.
+    const depts = {};
+    for (const r of report) {
+      const d = (depts[r.department || 'Other'] ||= { department: r.department || 'Other', members: 0, green: 0, red: 0, black: 0, present: 0, early: 0 });
+      d.members += 1;
+      d.green += r.green_month;
+      d.red += r.red;
+      d.black += r.black;
+      d.present += r.days_present;
+      d.early += r.early;
+    }
+    const departments = Object.values(depts)
+      .map((d) => ({ ...d, score: Math.round(((d.green - d.red - d.black * 2) / d.members) * 10) / 10 }))
+      .sort((a, b) => b.score - a.score);
+    const kudos = await db.all(
+      `SELECT u.id AS user_id, u.name, u.job_title, u.department, COUNT(*) AS kudos
+       FROM kudos k JOIN users u ON u.id = k.to_user
+       WHERE u.active = 1 AND to_char(k.created_at AT TIME ZONE ?, 'YYYY-MM') = ? GROUP BY u.id ORDER BY kudos DESC, u.name LIMIT 20`,
+      [s.timezone, month],
+    );
+    res.json({ month, rows, departments, kudos: kudos.map((k) => ({ ...k, kudos: Number(k.kudos) })) });
   });
 
   app.get('/api/admin/users', requireOwner, async (req, res) => {
     const month = localToday(await settings()).date.slice(0, 7);
     const [users, bal] = await Promise.all([
       db.all(
-        `SELECT id, name, username, role, phone, job_title, active, start_date, created_at
+        `SELECT id, name, username, role, phone, job_title, department, birthday, remote_allowed, active, start_date, created_at
          FROM users ORDER BY role DESC, active DESC, name`,
       ),
       balancesByUser(db, month),
@@ -442,10 +492,11 @@ function createApp(db, { now = () => new Date() } = {}) {
       fail('Username already exists', 409);
     }
     const row = await db.get(
-      `INSERT INTO users (name, username, password_hash, role, phone, job_title, start_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      `INSERT INTO users (name, username, password_hash, role, phone, job_title, start_date, department, birthday, remote_allowed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       [name, username, auth.hashPassword(password), role, str(req.body.phone, 30) || null,
-        str(req.body.job_title, 80) || null, startDate],
+        str(req.body.job_title, 80) || null, startDate, str(req.body.department, 40) || null,
+        isDate(req.body.birthday) ? req.body.birthday : null, req.body.remote_allowed ? 1 : 0],
     );
     res.status(201).json({ id: row.id });
   });
@@ -458,6 +509,9 @@ function createApp(db, { now = () => new Date() } = {}) {
     if (b.name !== undefined) fields.name = str(b.name, 80) || fail('Name is required');
     if (b.phone !== undefined) fields.phone = str(b.phone, 30) || null;
     if (b.job_title !== undefined) fields.job_title = str(b.job_title, 80) || null;
+    if (b.department !== undefined) fields.department = str(b.department, 40) || null;
+    if (b.birthday !== undefined) fields.birthday = b.birthday === '' || b.birthday === null ? null : isDate(b.birthday) ? b.birthday : fail('Invalid birthday');
+    if (b.remote_allowed !== undefined) fields.remote_allowed = b.remote_allowed ? 1 : 0;
     if (b.start_date !== undefined) fields.start_date = isDate(b.start_date) ? b.start_date : fail('Invalid date');
     if (b.active !== undefined) {
       if (user.id === req.user.id && !b.active) fail('You cannot deactivate your own account');
@@ -688,6 +742,10 @@ function createApp(db, { now = () => new Date() } = {}) {
     return { month, attendance, points, balances: b };
   }
 
+  registerCulture(app, {
+    db, settings, localToday, now, fail, str, posInt, idParam, requireUser, requireOwner, attendanceStats, addPoints,
+  });
+
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
   app.use((err, req, res, next) => {
@@ -705,6 +763,7 @@ function pickRules(s) {
   const keys = [
     'company_name', 'currency', 'early_start', 'early_end', 'late_after', 'very_late_after', 'close',
     'very_late_reds', 'work_days', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'radius_m',
+    'departments', 'kudos_daily_limit', 'kudos_green',
   ];
   return Object.fromEntries(keys.map((k) => [k, s[k]]));
 }
@@ -749,6 +808,10 @@ function validateSettings(s) {
   }
   out.work_days = [...new Set(s.work_days)];
   out.currency = str(s.currency, 10) || 'EGP';
+  num('kudos_daily_limit', 0, 50);
+  num('kudos_green', 0, 10);
+  if (!Array.isArray(s.departments) || s.departments.length > 40) fail('Invalid departments');
+  out.departments = [...new Set(s.departments.map((d) => str(d, 40)).filter(Boolean))];
   return out;
 }
 

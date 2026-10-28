@@ -136,7 +136,7 @@ async function runAbsenceJob(db, settings, now = new Date(), lookbackDays = 45) 
 async function monthReport(db, settings, month) {
   const { first, last } = monthBounds(month);
   const [users, stats, leaves, bal] = await Promise.all([
-    db.all(`SELECT id, name, username, job_title, active FROM users WHERE role = 'employee' ORDER BY name`),
+    db.all(`SELECT id, name, username, job_title, department, active FROM users WHERE role = 'employee' ORDER BY name`),
     db.all(
       `SELECT user_id, COUNT(*) AS days,
               COUNT(*) FILTER (WHERE status = 'early') AS early,
@@ -170,6 +170,7 @@ async function monthReport(db, settings, month) {
       name: u.name,
       username: u.username,
       job_title: u.job_title,
+      department: u.department,
       active: !!u.active,
       days_present: Number(a.days || 0),
       early: Number(a.early || 0),

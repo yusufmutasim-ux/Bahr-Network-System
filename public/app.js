@@ -55,6 +55,8 @@ const ICONS = {
   alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
   more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
   ban: '<circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/>',
+  heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+  megaphone: '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
   flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>',
 };
 const icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -98,18 +100,41 @@ const STATUS = {
   leave: ['On leave', 'amber'],
   absent: ['Absent', 'dark'],
   waiting: ['Not yet', ''],
+  remote: ['Remote', 'sky'],
   not_started: ['Starts later', ''],
 };
 const KIND = { green: ['Green', 'lime'], red: ['Red', 'pink'], black: ['Black', 'dark'] };
 const SOURCE = {
   early: 'Early check-in', late: 'Late check-in', absent: 'Absence', manual: 'Owner adjustment',
-  redeem: 'Green → Red swap', reward: 'Reward request', reward_refund: 'Reward refund',
+  redeem: 'Green → Red swap', reward: 'Reward request', reward_refund: 'Reward refund', kudos: 'Kudos bonus',
 };
 const REQ = {
   pending: ['Pending', 'amber'], approved: ['Approved', 'lime'], paid: ['Paid', 'lime'],
   rejected: ['Rejected', 'pink'], cancelled: ['Cancelled', 'slate'],
 };
 const METHODS = { instapay: 'InstaPay', vodafone_cash: 'Vodafone Cash', cash: 'Cash' };
+const KUDOS = {
+  creative: ['💡', 'Creative Spark', 'lime'],
+  teamwork: ['🤝', 'Team Player', 'teal'],
+  extra_mile: ['🚀', 'Extra Mile', 'sky'],
+  client_hero: ['🎯', 'Client Hero', 'pink'],
+  good_vibes: ['😄', 'Good Vibes', 'amber'],
+  mentor: ['🧠', 'Mentor', 'slate'],
+};
+const REACTIONS = ['🔥', '👏', '❤️', '😂', '🚀', '💯'];
+const MOODS = { 1: ['😫', 'Drained'], 2: ['😕', 'Meh'], 3: ['😐', 'Okay'], 4: ['🙂', 'Good'], 5: ['🤩', 'Amazing'] };
+const ANNOUNCE = { news: ['📰', 'News', 'sky'], celebration: ['🎉', 'Celebration', 'lime'], event: ['📅', 'Event', 'teal'], alert: ['⚠️', 'Heads up', 'amber'] };
+const QUOTES = [
+  'Great campaigns start with someone showing up early. ☀️', 'Your idea today could be a client\'s best month. 💡',
+  'Done is better than perfect. Then make it perfect. 🛠️', 'Hooks first, everything else second. 🎣',
+  'One more test, one more insight. 📈', 'Ask "why" three times before you open the brief. 🔍',
+  'Small wins compound. Keep stacking them. 🧱', 'A good brief is half the creative. 📝',
+  'Make it simple. Make it memorable. ✨', 'Every client call is a chance to wow. 📞',
+  'Data tells you what. Creativity tells you why. 📊', 'Celebrate a teammate today: send a kudos! 🙌',
+  'The first draft is just the warm-up. ✍️', 'Stay curious: great ideas come from everywhere. 🌍',
+  'Ship it, learn, iterate. 🔁', 'Today\'s coffee, tomorrow\'s campaign. ☕', 'Big brands were built one post at a time. 🏗️',
+  'If it doesn\'t stop the scroll, keep going. 🛑', 'Teamwork makes the creative work. 🤝', 'Be the reason the client says "wow". 🤩',
+];
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 const chip = (map, key, dot = true) => {
@@ -165,7 +190,21 @@ function greeting() {
 
 // ---------- API & UI primitives ----------
 
+// Short-lived cache for slow-changing GETs makes navigation feel instant; any write clears it.
+const CACHEABLE = /^\/(people|leaderboard|announcements|admin\/settings|admin\/users|me\/achievements)/;
+const apiCache = new Map();
 async function api(path, { method = 'GET', body } = {}) {
+  if (method === 'GET' && CACHEABLE.test(path)) {
+    const hit = apiCache.get(path);
+    if (hit && Date.now() - hit.at < 15000) return structuredClone(hit.data);
+  } else if (method !== 'GET') {
+    apiCache.clear();
+  }
+  const data = await apiFetch(path, { method, body });
+  if (method === 'GET' && CACHEABLE.test(path)) apiCache.set(path, { at: Date.now(), data: structuredClone(data) });
+  return data;
+}
+async function apiFetch(path, { method, body }) {
   const res = await fetch(`/api${path}`, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : {},
@@ -250,6 +289,241 @@ const skeleton = () =>
   `<div class="dash"><div class="stack-col"><div class="skeleton" style="height:220px"></div><div class="skeleton" style="height:180px"></div></div>
    <div class="skeleton" style="height:420px"></div></div>`;
 
+// ---------- Motion & delight ----------
+
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const soundOn = () => store.get('sound', 'on') === 'on';
+
+// Lightweight canvas confetti in the brand palette.
+function confetti({ count = 140, spread = 1, origin = { x: 0.5, y: 0.35 } } = {}) {
+  if (reduceMotion) return;
+  let cv = $('#fx');
+  if (!cv) {
+    cv = document.createElement('canvas');
+    cv.id = 'fx';
+    document.body.append(cv);
+  }
+  const ctx = cv.getContext('2d');
+  const W = (cv.width = innerWidth * devicePixelRatio);
+  const H = (cv.height = innerHeight * devicePixelRatio);
+  const colors = ['#dcf29b', '#a7e1d5', '#f6bcc3', '#c4e0f8', '#fbe0a6', '#0f1f1c', '#22a35a'];
+  const parts = Array.from({ length: count }, () => ({
+    x: origin.x * W, y: origin.y * H,
+    vx: (Math.random() - 0.5) * 26 * spread * devicePixelRatio, vy: (Math.random() * -18 - 6) * devicePixelRatio,
+    s: (Math.random() * 8 + 5) * devicePixelRatio, r: Math.random() * 6, vr: (Math.random() - 0.5) * 0.3,
+    c: colors[(Math.random() * colors.length) | 0], shape: Math.random() < 0.5,
+  }));
+  let frame = 0;
+  (function tick() {
+    ctx.clearRect(0, 0, W, H);
+    for (const p of parts) {
+      p.vy += 0.55 * devicePixelRatio;
+      p.vx *= 0.985;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.r += p.vr;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.r);
+      ctx.fillStyle = p.c;
+      ctx.globalAlpha = Math.max(0, 1 - frame / 160);
+      if (p.shape) ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2);
+      else { ctx.beginPath(); ctx.arc(0, 0, p.s / 3, 0, Math.PI * 2); ctx.fill(); }
+      ctx.restore();
+    }
+    if (++frame < 170) requestAnimationFrame(tick);
+    else ctx.clearRect(0, 0, W, H);
+  })();
+}
+
+// Little emoji fireworks from an element (reactions, mood, kudos).
+function burst(emoji, el, n = 7) {
+  if (reduceMotion || !el) return;
+  const r = el.getBoundingClientRect();
+  for (let i = 0; i < n; i++) {
+    const b = document.createElement('span');
+    b.className = 'burst';
+    b.textContent = emoji;
+    b.style.left = `${r.left + r.width / 2 - 10}px`;
+    b.style.top = `${r.top + r.height / 2 - 12}px`;
+    b.style.setProperty('--dx', `${(Math.random() - 0.5) * 160}px`);
+    b.style.setProperty('--dy', `${-60 - Math.random() * 110}px`);
+    b.style.setProperty('--r', `${(Math.random() - 0.5) * 80}deg`);
+    document.body.append(b);
+    setTimeout(() => b.remove(), 1100);
+  }
+}
+
+// Soft synthesized chimes (no audio files). Off switch in Account.
+let audioCtx;
+function chime(kind = 'success') {
+  if (!soundOn()) return;
+  try {
+    audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+    const notes = { success: [523.25, 659.25, 783.99], big: [523.25, 659.25, 783.99, 1046.5], soft: [659.25, 880], error: [330, 262] }[kind];
+    notes.forEach((f, i) => {
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = 'sine';
+      o.frequency.value = f;
+      const t = audioCtx.currentTime + i * 0.09;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.12, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+      o.connect(g).connect(audioCtx.destination);
+      o.start(t);
+      o.stop(t + 0.55);
+    });
+  } catch { /* audio unavailable */ }
+}
+const haptic = (p = 30) => navigator.vibrate?.(p);
+
+// Celebrations queue so two never stack on top of each other.
+const celebQueue = [];
+let celebOpen = false;
+function celebrate(opts) {
+  celebQueue.push(opts);
+  if (!celebOpen) nextCelebration();
+}
+function nextCelebration() {
+  const opts = celebQueue.shift();
+  celebOpen = !!opts;
+  if (opts) showCelebration(opts);
+}
+function showCelebration({ emoji = '🎉', title, sub = '', confettiCount = 160, sound = 'big' }) {
+  const el = document.createElement('div');
+  el.className = 'celebrate';
+  el.innerHTML = `<div class="box"><span class="big-emoji">${emoji}</span><h2>${esc(title)}</h2><p class="muted">${sub}</p>
+    <button class="btn mt" type="button">Let's go!</button></div>`;
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    el.classList.add('out');
+    setTimeout(() => {
+      el.remove();
+      nextCelebration();
+    }, 300);
+  };
+  el.onclick = close;
+  document.body.append(el);
+  confetti({ count: confettiCount });
+  chime(sound);
+  haptic([30, 40, 60]);
+  setTimeout(close, 4200);
+}
+
+// Count numbers up from zero, keeping any prefix/suffix ("91%", "3,000 EGP").
+function countUp(root = document) {
+  if (reduceMotion) return;
+  $$('.t-big, .t-num, .kpi .value, .ring b, [data-count]', root).forEach((el) => {
+    const node = [...el.childNodes].find((n) => n.nodeType === 3 && /\d/.test(n.textContent));
+    if (!node) return;
+    const m = node.textContent.match(/^(\D*?)(-?[\d,]+(?:\.\d+)?)(.*)$/s);
+    if (!m) return;
+    const target = Number(m[2].replace(/,/g, ''));
+    if (!Number.isFinite(target) || Math.abs(target) < 2) return;
+    const dec = (m[2].split('.')[1] || '').length;
+    const t0 = performance.now();
+    const dur = 900;
+    const step = (t) => {
+      const k = Math.min(1, (t - t0) / dur);
+      const v = target * (1 - Math.pow(1 - k, 3));
+      node.textContent = `${m[1]}${v.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec })}${m[3]}`;
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+
+// Staggered entrance for whatever was just rendered.
+function animateIn(root = $('#app')) {
+  if (reduceMotion || !root) return;
+  let i = 0;
+  $$('.card, .tile, .list-item, .feed-item, .badge-card, .announce, .bars .stackbar, .battle .row-b', root).forEach((el) => {
+    if (el.closest('.tile') && el !== el.closest('.tile')) return;
+    el.style.setProperty('--i', Math.min(i++, 18));
+    if (!el.classList.contains('stackbar')) el.classList.add('anim-in');
+  });
+  countUp(root);
+}
+
+// Material-style ripple on any button-like element.
+document.addEventListener('pointerdown', (e) => {
+  const t = e.target.closest('.btn, .icon-btn, .chip, .seg button, .seg a, .nav a, .bottom-nav a, .reacts button');
+  if (!t || reduceMotion) return;
+  const r = t.getBoundingClientRect();
+  const size = Math.max(r.width, r.height);
+  const rp = document.createElement('span');
+  rp.className = 'ripple';
+  rp.style.cssText = `width:${size}px;height:${size}px;left:${e.clientX - r.left - size / 2}px;top:${e.clientY - r.top - size / 2}px`;
+  t.append(rp);
+  setTimeout(() => rp.remove(), 650);
+});
+
+const quoteOfDay = () => QUOTES[Math.floor(Date.now() / 864e5) % QUOTES.length];
+
+// Upcoming birthdays and work anniversaries in the next `days` days.
+function upcomingCelebrations(people, today, days = 7) {
+  const out = [];
+  for (let i = 0; i < days; i++) {
+    const d = toDate(today);
+    d.setUTCDate(d.getUTCDate() + i);
+    const md = d.toISOString().slice(5, 10);
+    const y = d.getUTCFullYear();
+    for (const p of people) {
+      if (p.birthday === md) out.push({ p, kind: 'birthday', inDays: i, date: d.toISOString().slice(0, 10) });
+      const years = p.start_date ? y - Number(p.start_date.slice(0, 4)) : 0;
+      if (p.start_date && p.start_date.slice(5, 10) === md && years >= 1) out.push({ p, kind: 'anniversary', years, inDays: i, date: d.toISOString().slice(0, 10) });
+    }
+  }
+  return out;
+}
+function celebrationsHtml(list) {
+  if (!list.length) return empty('gift', 'No birthdays or anniversaries this week');
+  return `<div class="list">${list
+    .map((c) => `<div class="list-item">${avatar(c.p.name)}<div class="grow"><strong>${esc(c.p.name)}</strong>
+      <span>${c.kind === 'birthday' ? '🎂 Birthday' : `🏆 ${c.years} year${c.years === 1 ? '' : 's'} at the agency`} · ${c.inDays === 0 ? '<b>Today!</b>' : c.inDays === 1 ? 'Tomorrow' : fmtDate(c.date)}</span></div>
+      <button class="btn sm ${c.inDays === 0 ? 'lime' : 'light'}" data-kudos-to="${c.p.id}" data-kudos-cat="good_vibes">${c.inDays === 0 ? '🎉 Celebrate' : 'Wish'}</button></div>`)
+    .join('')}</div>`;
+}
+
+function levelCard(a) {
+  const L = a.level;
+  const fill = L.to ? pct(L.xp - L.from, L.to - L.from) : 100;
+  const next = a.badges.filter((b) => !b.unlocked).sort((x, y) => y.progress / y.target - x.progress / x.target)[0];
+  return `<div class="card">
+    <div class="card-head"><h2>Level</h2><span class="level-chip"><b>${L.level}</b>${esc(L.name)}</span></div>
+    <div class="row between small"><span class="strong num">${L.xp.toLocaleString('en-US')} XP</span><span class="muted">${L.to ? `${(L.to - L.xp).toLocaleString('en-US')} XP to ${esc(L.next_name)}` : 'Max level 👑'}</span></div>
+    <div class="xp-bar" style="margin-top:8px"><i style="width:${Math.max(3, fill)}%"></i></div>
+    <div class="row wrap mt" style="gap:6px">${a.badges.filter((b) => b.unlocked).map((b) => `<span class="chip lime" title="${esc(b.desc)}">${b.emoji} ${esc(b.name)}</span>`).join('') || '<span class="muted small">No badges yet. Your first one is close!</span>'}</div>
+    ${next ? `<div class="notice sky mt"><span style="font-size:1.4rem">${next.emoji}</span><span>Next badge: <strong>${esc(next.name)}</strong>. ${esc(next.desc)} (${next.progress}/${next.target})</span></div>` : ''}
+  </div>`;
+}
+
+function badgesGrid(badges) {
+  return `<div class="badges">${badges
+    .map((b) => `<div class="badge-card ${b.unlocked ? 'unlocked' : 'locked'}" title="${esc(b.desc)}"><span class="em">${b.emoji}</span><strong>${esc(b.name)}</strong>
+      <small>${esc(b.desc)}</small>${b.unlocked ? '' : `<div class="mini"><i style="width:${pct(b.progress, b.target)}%"></i></div>`}</div>`)
+    .join('')}</div>`;
+}
+
+// Fire celebrations for newly unlocked badges / level-ups since the last visit.
+function checkMilestones(a) {
+  const prevLevel = Number(store.get(`lvl.${me.id}`, 0));
+  const prevBadges = new Set(JSON.parse(store.get(`bdg.${me.id}`, '[]')));
+  const nowBadges = a.badges.filter((b) => b.unlocked).map((b) => b.key);
+  store.set(`lvl.${me.id}`, a.level.level);
+  store.set(`bdg.${me.id}`, JSON.stringify(nowBadges));
+  if (!prevLevel) return; // first visit: just remember
+  const fresh = a.badges.filter((b) => b.unlocked && !prevBadges.has(b.key));
+  if (a.level.level > prevLevel) {
+    setTimeout(() => celebrate({ emoji: '🆙', title: `Level up: ${a.level.name}!`, sub: `You reached level ${a.level.level}. Keep it going!` }), 600);
+  } else if (fresh.length) {
+    setTimeout(() => celebrate({ emoji: fresh[0].emoji, title: `Badge unlocked: ${fresh[0].name}`, sub: esc(fresh[0].desc) }), 600);
+  }
+}
+
 // ---------- State ----------
 
 let me = null;
@@ -288,13 +562,18 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintTheme
 const EMPLOYEE_NAV = [
   { group: 'Overview' },
   { key: '', label: 'My Activity', icon: 'activity', view: () => viewEmployeeHome() },
+  { key: 'profile', label: 'My Profile', icon: 'user', view: () => viewPerson(new URLSearchParams(`id=${me.id}`)) },
   { key: 'history', label: 'My History', icon: 'calendar', view: (p) => viewHistory(p) },
+  { group: 'Team' },
+  { key: 'wall', label: 'Team Wall', icon: 'heart', view: (p) => viewWall(p) },
+  { key: 'people', label: 'People', icon: 'users', view: (p) => viewPeople(p) },
   { group: 'Requests' },
   { key: 'leaves', label: 'Leave', icon: 'flag', view: () => viewMyLeaves() },
   { key: 'rewards', label: 'Rewards', icon: 'gift', view: () => viewMyRewards() },
-  { group: 'Team' },
+  { group: 'Fun' },
   { key: 'leaderboard', label: 'Leaderboard', icon: 'trophy', view: (p) => viewLeaderboard(p) },
   { key: 'account', label: 'Account', icon: 'user', view: () => viewAccount(), hidden: true },
+  { key: 'person', label: 'Profile', icon: 'user', view: (p) => viewPerson(p), hidden: true },
 ];
 const OWNER_NAV = [
   { group: 'Overview' },
@@ -303,6 +582,8 @@ const OWNER_NAV = [
   { group: 'People' },
   { key: 'employees', label: 'Staff', icon: 'users', view: (p) => viewStaff(p) },
   { key: 'points', label: 'Points', icon: 'star', view: () => viewPoints() },
+  { group: 'Culture' },
+  { key: 'wall', label: 'Team Wall', icon: 'heart', view: (p) => viewWall(p) },
   { key: 'leaderboard', label: 'Leaderboard', icon: 'trophy', view: (p) => viewLeaderboard(p) },
   { group: 'Requests' },
   { key: 'leaves', label: 'Leave Requests', icon: 'flag', view: (p) => viewLeaveRequests(p), count: () => pending.leaves },
@@ -311,11 +592,12 @@ const OWNER_NAV = [
   { key: 'settings', label: 'Settings', icon: 'settings', view: () => viewSettings() },
   { key: 'account', label: 'Account', icon: 'user', view: () => viewAccount(), hidden: true },
   { key: 'staff', label: 'Staff profile', icon: 'user', view: (p) => viewStaffProfile(p), hidden: true },
+  { key: 'person', label: 'Profile', icon: 'user', view: (p) => viewPerson(p), hidden: true },
 ];
-const BOTTOM_LABEL = { '': 'Home', history: 'History', leaves: 'Leave', rewards: 'Rewards', leaderboard: 'Ranking', employees: 'Staff', reports: 'Report' };
+const BOTTOM_LABEL = { '': 'Home', history: 'History', leaves: 'Leave', rewards: 'Rewards', leaderboard: 'Ranking', employees: 'Staff', reports: 'Report', wall: 'Wall', profile: 'Me' };
 const BOTTOM = {
-  employee: ['', 'history', 'leaves', 'rewards', 'leaderboard'],
-  owner: ['', 'employees', 'leaves', 'rewards', 'reports'],
+  employee: ['', 'wall', 'leaves', 'rewards', 'profile'],
+  owner: ['', 'employees', 'wall', 'leaves', 'reports'],
 };
 
 const navItems = () => (me.role === 'owner' ? OWNER_NAV : EMPLOYEE_NAV);
@@ -375,6 +657,8 @@ function renderOnline(rows) {
 }
 
 document.addEventListener('click', (e) => {
+  const k = e.target.closest('[data-kudos-to]');
+  if (k) return kudosModal(Number(k.dataset.kudosTo) || null, k.dataset.kudosCat);
   const t = e.target.closest('[data-go],[data-palette],[data-theme-btn],[data-logout]');
   if (!t) return;
   if (t.dataset.go) go(t.dataset.go);
@@ -428,9 +712,7 @@ async function route() {
   app.innerHTML = skeleton();
   try {
     await r.view(params);
-    app.classList.remove('page');
-    void app.offsetWidth;
-    app.classList.add('page');
+    animateIn(app);
   } catch (err) {
     if (err.status === 401) return start();
     app.innerHTML = `<div class="card"><div class="notice pink">${icon('alert')}${esc(err.message)}</div></div>`;
@@ -450,7 +732,12 @@ async function start() {
     document.title = `${company} — Attendance`;
     $('#shell').hidden = false;
     await refreshCounts();
-    route();
+    await route();
+    if (notifCount()) {
+      $('#bell-btn').classList.add('shake');
+      setTimeout(() => $('#bell-btn').classList.remove('shake'), 900);
+    }
+    setTimeout(celebrateNews, 700);
   } catch {
     try {
       const setup = await api('/setup');
@@ -481,11 +768,12 @@ async function refreshCounts() {
       ].sort((a, b) => new Date(b.at) - new Date(a.at));
     } else {
       renderOnline(null);
-      const [leaves, rewards] = await Promise.all([api('/me/leaves'), api('/me/rewards')]);
+      const [leaves, rewards, kd] = await Promise.all([api('/me/leaves'), api('/me/rewards'), api(`/kudos?user_id=${me.id}`)]);
       const seen = Number(store.get('seen', 0));
       notifItems = [
         ...leaves.filter((l) => l.decided_at).map((l) => ({ at: l.decided_at, who: 'Leave', text: `${fmtDate(l.from_date)} → ${fmtDate(l.to_date)} was ${l.status}`, href: '#/leaves', ico: 'flag', status: l.status })),
         ...rewards.filter((r) => r.decided_at).map((r) => ({ at: r.decided_at, who: 'Reward', text: `${r.points} points request was ${r.status === 'paid' ? 'paid 🎉' : r.status}`, href: '#/rewards', ico: 'gift', status: r.status })),
+        ...kd.rows.filter((k) => k.to_user === me.id).map((k) => ({ at: k.created_at, who: `${k.from_name} sent you kudos`, text: `${KUDOS[k.category]?.[0] || '🙌'} ${KUDOS[k.category]?.[1] || ''}${k.message ? `: "${k.message}"` : ''}`, href: '#/profile', ico: 'heart', status: 'approved', kind: 'kudos' })),
       ]
         .sort((a, b) => new Date(b.at) - new Date(a.at))
         .slice(0, 15)
@@ -496,6 +784,18 @@ async function refreshCounts() {
   }
 }
 const notifCount = () => notifItems.filter((n) => n.unread).length;
+
+// Celebrate good news the employee hasn't seen yet (paid rewards, new kudos), once per item.
+function celebrateNews() {
+  if (!me || me.role !== 'employee') return;
+  const fresh = notifItems.filter((n) => n.unread && (n.status === 'paid' || n.kind === 'kudos'));
+  const shown = new Set(JSON.parse(store.get(`shown.${me.id}`, '[]')));
+  const item = fresh.find((n) => !shown.has(`${n.at}|${n.who}`));
+  if (!item) return;
+  store.set(`shown.${me.id}`, JSON.stringify([...shown, ...fresh.map((n) => `${n.at}|${n.who}`)].slice(-100)));
+  if (item.status === 'paid') celebrate({ emoji: '💸', title: 'Your reward was paid!', sub: 'Check your wallet. Well deserved!' });
+  else celebrate({ emoji: '🙌', title: item.who, sub: esc(item.text), confettiCount: 120, sound: 'success' });
+}
 
 function toggleNotifications() {
   const pop = $('#notif');
@@ -530,6 +830,7 @@ async function openPalette() {
   const items = [
     ...navItems().filter((n) => n.view && !['staff'].includes(n.key)).map((n) => ({ label: n.label, sub: 'Page', ico: n.icon, run: () => go(`#/${n.key}`) })),
     ...(me.role === 'employee' ? [{ label: 'Check in now', sub: 'Action', ico: 'pin', run: () => go('#/') }] : []),
+    { label: 'Send kudos to a teammate', sub: 'Action', ico: 'heart', run: () => kudosModal() },
     ...(me.role === 'owner'
       ? [
           { label: 'Add employee', sub: 'Action', ico: 'plus', run: () => { go('#/employees'); setTimeout(addEmployeeModal, 300); } },
@@ -748,12 +1049,18 @@ function monthInput(month, hashBase) {
 // ---------- Employee: home ----------
 
 async function viewEmployeeHome() {
-  const [d, h, leaves, lb] = await Promise.all([
+  const [d, h, leaves, lb, ach, ann, people] = await Promise.all([
     api('/me/dashboard'),
     api(`/me/history?month=${thisMonth()}`),
     api('/me/leaves'),
     api('/leaderboard').catch(() => ({ rows: [] })),
+    api('/me/achievements'),
+    api('/announcements').catch(() => []),
+    api('/people').catch(() => []),
   ]);
+  const celebrations = upcomingCelebrations(people, d.now.date);
+  const dismissed = JSON.parse(store.get('dismissed', '[]'));
+  const pinned = ann.filter((x) => x.pinned && !dismissed.includes(x.id));
   cachedRules = d.rules;
   const r = d.rules;
   const a = d.attendance;
@@ -768,6 +1075,9 @@ async function viewEmployeeHome() {
     const msg = a.status === 'early' ? 'You earned +1 green point 🎉' : a.status.includes('late') ? `${a.status === 'late' ? 1 : r.very_late_reds} red penalty recorded` : 'Right on time. Nice!';
     checkBlock = `<div class="status-banner ${st[1]}"><span class="ico">${icon('check')}</span>
         <div><strong>Checked in at ${fmtTime(a.check_in_time)} · ${st[0]}</strong><div class="small">${msg}${a.check_out_time ? ` · Checked out ${fmtTime(a.check_out_time)}` : ''}</div></div></div>
+      ${a.mode === 'remote' ? `<div class="notice sky mt">${icon('pin')}Checked in remotely${a.distance_m != null ? ` · ${(a.distance_m / 1000).toFixed(1)} km from the office` : ''}</div>` : ''}
+      <div class="mt"><p class="strong small" style="margin-bottom:8px">${a.mood ? `Today's mood: ${MOODS[a.mood][0]} ${MOODS[a.mood][1]}. Tap to change` : 'How are you feeling today?'}</p>
+        <div class="moods" id="moods">${Object.entries(MOODS).map(([k, [em, label]]) => `<button type="button" data-mood="${k}" class="${Number(k) === a.mood ? 'on' : ''}"><span>${em}</span>${label}</button>`).join('')}</div></div>
       ${a.check_out_time ? '' : `<button class="btn light block mt" id="checkout" style="height:52px">${icon('logout')}Check out</button>`}`;
   } else {
     const gated = d.work_day && d.check_in_window !== 'open';
@@ -776,6 +1086,7 @@ async function viewEmployeeHome() {
     if (d.on_leave) notes.push(`<div class="notice amber">${icon('flag')}You're on approved leave today.</div>`);
     if (gated && d.check_in_window === 'closed') notes.push(`<div class="notice dark">${icon('ban')}Check-in closed at ${fmtTime(r.close)}.</div>`);
     if (gated && d.check_in_window === 'not_open') notes.push(`<div class="notice sky">${icon('clock')}Check-in opens at ${fmtTime(r.early_start)}.</div>`);
+    if (me.remote_allowed && !gated) notes.push(`<div class="notice sky">${icon('pin')}Remote check-in is enabled for you. You can check in from anywhere.</div>`);
     checkBlock = `<div class="grid" style="gap:10px">${notes.join('')}</div>${
       gated ? '' : `<button class="checkin-btn ${notes.length ? 'mt' : ''}" id="checkin">${icon('pin')}<span>Check in</span></button>
         <p class="muted small" style="margin-top:10px;text-align:center">You must be within ${r.radius_m} m of the office. Location is checked once, when you tap.</p>`
@@ -783,9 +1094,11 @@ async function viewEmployeeHome() {
   }
 
   $('#app').innerHTML = `
-    ${pageHead(`${greeting()}, ${esc(me.name.split(' ')[0])}`, fmtLong(d.now.date), `
+    ${pageHead(`${greeting()}, ${esc(me.name.split(' ')[0])} <span class="wave">👋</span>`, fmtLong(d.now.date), `
       ${d.streak ? `<span class="chip pink">${icon('flame')}${d.streak}-day streak</span>` : ''}
-      ${myRank ? `<a class="chip lime" href="#/leaderboard" style="text-decoration:none">${icon('trophy')}#${myRank} this month</a>` : ''}`)}
+      ${myRank ? `<a class="chip lime" href="#/leaderboard" style="text-decoration:none">${icon('trophy')}#${myRank} this month</a>` : ''}
+      <a class="level-chip" href="#/profile" style="text-decoration:none"><b>${ach.level.level}</b>${esc(ach.level.name)}</a>`)}
+    ${pinned.length ? `<div class="grid" style="gap:10px;margin-bottom:16px">${pinned.map((x) => announceHtml(x, false, true)).join('')}</div>` : ''}
     <div class="dash">
       <div class="stack-col">
         <div class="card">
@@ -809,7 +1122,7 @@ async function viewEmployeeHome() {
           </div>
         </div>
 
-        <div class="card">
+        <div class="card m-first">
           <div class="card-head"><h2>Staff check-in</h2><span class="chip">${icon('clock')}Server time</span></div>
           <div class="row between wrap" style="align-items:flex-end;margin-bottom:6px">
             <div class="clock num" id="clock">${fmtTime(d.now.time)}</div>
@@ -840,6 +1153,12 @@ async function viewEmployeeHome() {
       </div>
 
       <div class="stack-col">
+        ${levelCard(ach)}
+        <div class="quote"><p>${esc(quoteOfDay())}</p><small>Thought of the day · ${esc(company)}</small></div>
+        <div class="card">
+          <div class="card-head"><h2>Celebrations 🎈</h2><button class="btn sm light" data-kudos-to="">${icon('heart')}Kudos</button></div>
+          ${celebrationsHtml(celebrations)}
+        </div>
         <div class="card">
           <div class="card-head"><h2>My month</h2><a class="btn sm light" href="#/history">Details</a></div>
           ${calendar(d.now.date.slice(0, 7), { attendance: h.attendance, points: h.points, leaves, workDays: r.work_days, startDate: me.start_date, today: d.now.date })}
@@ -867,7 +1186,7 @@ async function viewEmployeeHome() {
   every(1000, () => {
     const s = Math.floor(startSec + (Date.now() - base) / 1000) % 86400;
     const el = $('#clock');
-    if (el) el.textContent = fmtTime(`${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}`);
+    if (el) el.innerHTML = fmtTime(`${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}`).replace(':', '<span class="colon">:</span>');
   });
 
   const checkin = $('#checkin');
@@ -880,7 +1199,10 @@ async function viewEmployeeHome() {
           const pos = await getPosition();
           label.textContent = 'Checking in…';
           const res = await api('/me/check-in', { method: 'POST', body: pos });
-          toast(res.green ? 'Checked in early! +1 green point 🎉' : res.red ? `Checked in late: ${res.red} red penalty` : 'Checked in ✓', res.red ? 'error' : 'success');
+          haptic([20, 30, 40]);
+          if (res.green) celebrate({ emoji: '🐦', title: 'Early bird! +1 green point', sub: `Checked in at ${fmtTime(res.attendance.check_in_time)}. The team's lucky to have you.` });
+          else if (res.red) { chime('soft'); toast(`Checked in late: ${res.red} red penalty. Tomorrow is a new day 💪`, 'error'); }
+          else { confetti({ count: 70 }); chime('success'); toast('You\'re in! Have a great day ☀️', 'success'); }
           route();
         } finally {
           label.textContent = 'Check in';
@@ -890,7 +1212,27 @@ async function viewEmployeeHome() {
   const checkout = $('#checkout');
   if (checkout) checkout.onclick = () => act(checkout, async () => { await api('/me/check-out', { method: 'POST', body: {} }); route(); }, 'Checked out. See you tomorrow!');
   const redeem = $('#redeem');
-  if (redeem) redeem.onclick = () => act(redeem, async () => { await api('/me/redeem', { method: 'POST', body: {} }); route(); }, '1 red penalty removed');
+  if (redeem) redeem.onclick = () => act(redeem, async () => { await api('/me/redeem', { method: 'POST', body: {} }); confetti({ count: 60 }); route(); }, '1 red penalty removed');
+  $$('#moods [data-mood]').forEach((b) => (b.onclick = async () => {
+    try {
+      await api('/me/mood', { method: 'POST', body: { mood: Number(b.dataset.mood) } });
+      $$('#moods button').forEach((x) => x.classList.toggle('on', x === b));
+      burst(MOODS[b.dataset.mood][0], b, 8);
+      chime('soft');
+      haptic(15);
+      toast(Number(b.dataset.mood) <= 2 ? 'Thanks for sharing. Hope your day gets better 💛' : 'Mood saved. Love the energy!', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  }));
+  $$('[data-dismiss]').forEach((b) => (b.onclick = () => {
+    store.set('dismissed', JSON.stringify([...dismissed, Number(b.dataset.dismiss)]));
+    b.closest('.announce').remove();
+  }));
+  checkMilestones(ach);
+  const myBday = celebrations.find((c) => c.kind === 'birthday' && c.p.id === me.id && c.inDays === 0);
+  if (myBday && store.get('bday', '') !== d.now.date) {
+    store.set('bday', d.now.date);
+    setTimeout(() => celebrate({ emoji: '🎂', title: `Happy birthday, ${me.name.split(' ')[0]}!`, sub: `The whole ${esc(company)} team wishes you an amazing year.`, confettiCount: 260 }), 500);
+  }
 }
 
 function miniLeaderboard(rows) {
@@ -1079,34 +1421,50 @@ async function viewMyRewards() {
 
 async function viewLeaderboard(params) {
   const month = params.get('month') || thisMonth();
+  const tab = params.get('tab') || 'people';
   const lb = await api(`/leaderboard?month=${month}`);
-  const top = lb.rows.slice(0, 3);
-  const order = [1, 0, 2].filter((i) => top[i]);
-  const cls = ['first', 'second', 'third'];
   const colors = ['lime', 'teal', 'pink'];
-  $('#app').innerHTML = `
-    ${pageHead('Leaderboard', `Who earned the most green points in ${fmtMonth(month)}`, monthInput(month, '#/leaderboard'))}
-    ${
-      lb.rows.length
-        ? `<div class="card"><div class="podium">${order
-            .map((i) => {
-              const x = top[i];
-              return `<div class="p ${cls[i]} ${colors[i]}"><span class="medal">${['🥇', '🥈', '🥉'][i]}</span>${avatar(x.name, 'lg')}
-                <strong>${esc(x.name)}</strong><span class="small">${esc(x.job_title || 'Staff')}</span>
-                <span class="t-big num" style="font-size:1.6rem;font-weight:800">${x.green}</span><span class="tiny">green points</span></div>`;
-            })
-            .join('')}</div></div>
-          <div class="card"><div class="table-wrap"><table><thead><tr><th>#</th><th>Employee</th><th>Green</th><th>Red</th><th>Black</th><th>Early days</th><th>Present</th></tr></thead><tbody>
-          ${lb.rows
-            .map(
-              (x, i) => `<tr ${x.user_id === me.id ? 'style="background:var(--sunken)"' : ''}><td class="rank">${i + 1}</td>
-                <td><div class="row">${avatar(x.name, 'sm')}<div><strong>${esc(x.name)}</strong><div class="tiny muted">${esc(x.job_title || 'Staff')}</div></div></div></td>
-                <td><span class="chip lime num">${x.green}</span></td><td><span class="chip pink num">${x.red}</span></td><td><span class="chip dark num">${x.black}</span></td>
-                <td class="num">${x.early}</td><td class="num">${x.days_present}</td></tr>`,
-            )
-            .join('')}</tbody></table></div></div>`
-        : `<div class="card">${empty('trophy', 'No employees yet')}</div>`
-    }`;
+  const podium = (top, value, unit) => {
+    const order = [1, 0, 2].filter((i) => top[i]);
+    return `<div class="card"><div class="podium">${order
+      .map((i) => `<div class="p ${['first', 'second', 'third'][i]} ${colors[i]} anim-in" style="--i:${i}"><span class="medal float">${['🥇', '🥈', '🥉'][i]}</span>${avatar(top[i].name, 'lg')}
+        <strong>${esc(top[i].name)}</strong><span class="small">${esc(top[i].department || top[i].job_title || 'Staff')}</span>
+        <span class="t-big num" style="font-size:1.6rem;font-weight:800">${value(top[i])}</span><span class="tiny">${unit}</span></div>`)
+      .join('')}</div></div>`;
+  };
+  const tabs = `<div class="seg">${[['people', '🏆 People'], ['departments', '⚔️ Departments'], ['kudos', '🙌 Most appreciated']]
+    .map(([k, l]) => `<a href="#/leaderboard?tab=${k}&month=${month}" class="${k === tab ? 'on' : ''}">${l}</a>`)
+    .join('')}</div>`;
+  let body = '';
+  if (tab === 'departments') {
+    const max = Math.max(1, ...lb.departments.map((d) => Math.abs(d.score)));
+    body = lb.departments.length
+      ? `<div class="card"><div class="card-head"><h2>Department battle</h2><span class="muted small">Score = (green − red − 2×black) per member</span></div>
+        <div class="battle">${lb.departments
+          .map((d, i) => `<div class="row-b"><span class="rank">${['🥇', '🥈', '🥉'][i] || i + 1}</span>
+            <div class="track-b"><i class="${['lime', 'teal', 'pink', 'sky', 'amber', 'slate'][i % 6]}" style="width:${Math.max(6, (Math.max(0, d.score) / max) * 100)}%;--i:${i}"></i>
+              <span>${esc(d.department)} <span class="muted tiny">· ${d.members} ${d.members === 1 ? 'person' : 'people'} · ${d.early} early</span></span></div>
+            <strong class="num">${d.score}</strong></div>`)
+          .join('')}</div></div>`
+      : `<div class="card">${empty('users', 'Assign departments to staff to start the battle')}</div>`;
+  } else if (tab === 'kudos') {
+    body = lb.kudos.length
+      ? `${podium(lb.kudos.slice(0, 3), (x) => x.kudos, 'kudos received')}
+        <div class="card"><div class="list">${lb.kudos.map((x, i) => `<div class="list-item"><span class="rank">${i + 1}</span>${avatar(x.name)}
+          <div class="grow"><strong>${esc(x.name)}</strong><span>${esc(x.department || x.job_title || '')}</span></div><span class="chip lime num">🙌 ${x.kudos}</span>
+          ${x.user_id !== me.id ? `<button class="btn sm light" data-kudos-to="${x.user_id}">Kudos</button>` : ''}</div>`).join('')}</div></div>`
+      : `<div class="card">${empty('heart', 'No kudos this month yet', `<button class="btn sm" data-kudos-to="">${icon('heart')}Send the first one</button>`)}</div>`;
+  } else {
+    body = lb.rows.length
+      ? `${podium(lb.rows.slice(0, 3), (x) => x.green, 'green points')}
+        <div class="card"><div class="table-wrap"><table><thead><tr><th>#</th><th>Employee</th><th>Green</th><th>Red</th><th>Black</th><th>Early days</th><th>Present</th></tr></thead><tbody>
+        ${lb.rows.map((x, i) => `<tr ${x.user_id === me.id ? 'style="background:var(--sunken)"' : ''}><td class="rank">${i + 1}</td>
+          <td><a href="#/person?id=${x.user_id}" class="row" style="text-decoration:none">${avatar(x.name, 'sm')}<div><strong>${esc(x.name)}</strong><div class="tiny muted">${esc(x.department || x.job_title || 'Staff')}</div></div></a></td>
+          <td><span class="chip lime num">${x.green}</span></td><td><span class="chip pink num">${x.red}</span></td><td><span class="chip dark num">${x.black}</span></td>
+          <td class="num">${x.early}</td><td class="num">${x.days_present}</td></tr>`).join('')}</tbody></table></div></div>`
+      : `<div class="card">${empty('trophy', 'No employees yet')}</div>`;
+  }
+  $('#app').innerHTML = `${pageHead('Leaderboard <span class="wave">🏆</span>', fmtMonth(month), `${tabs}${monthInput(month, `#/leaderboard?tab=${tab}`)}`)}${body}`;
 }
 
 // ---------- Account (both roles) ----------
@@ -1130,6 +1488,7 @@ async function viewAccount() {
           <div class="seg" id="theme-seg">${['system', 'light', 'dark']
             .map((t) => `<button type="button" data-t="${t}" class="${theme === t ? 'on' : ''}">${icon(t === 'dark' ? 'moon' : t === 'light' ? 'sun' : 'settings')}${t[0].toUpperCase() + t.slice(1)}</button>`)
             .join('')}</div>
+          <div class="mt"><label class="toggle"><input type="checkbox" id="sound" ${soundOn() ? 'checked' : ''}>Sounds &amp; celebrations audio</label></div>
           <p class="muted small mt">Tip: press <kbd>⌘K</kbd> or <kbd>/</kbd> anywhere to search.</p>
         </div>
         <div class="card"><div class="card-head"><h2>Change password</h2></div>
@@ -1145,6 +1504,10 @@ async function viewAccount() {
     setTheme(b.dataset.t);
     $$('#theme-seg button').forEach((x) => x.classList.toggle('on', x === b));
   }));
+  $('#sound').onchange = (e) => {
+    store.set('sound', e.target.checked ? 'on' : 'off');
+    if (e.target.checked) chime('success');
+  };
   $('#pw').onsubmit = (e) => {
     e.preventDefault();
     act(e.submitter, async () => { await api('/me/password', { method: 'POST', body: formData(e.target) }); e.target.reset(); }, 'Password updated');
@@ -1166,7 +1529,10 @@ const BOARD_FILTERS = {
 
 async function viewOwnerDashboard(params) {
   const date = params.get('date') || '';
-  const [o, feed] = await Promise.all([api(`/admin/overview${date ? `?date=${date}` : ''}`), api('/admin/feed')]);
+  const [o, feed, people] = await Promise.all([api(`/admin/overview${date ? `?date=${date}` : ''}`), api('/admin/feed'), api('/people')]);
+  const celebrations = upcomingCelebrations(people, o.now.date);
+  const md = o.mood;
+  const moodEmoji = md.avg ? MOODS[Math.round(md.avg)][0] : '🫥';
   pending = o.pending;
   cachedRules = o.rules;
   renderShell('');
@@ -1181,7 +1547,7 @@ async function viewOwnerDashboard(params) {
   let q = '';
 
   $('#app').innerHTML = `
-    ${pageHead(`${greeting()}, ${esc(me.name.split(' ')[0])}`, `${fmtLong(o.date)}${o.work_day ? '' : ' · not a work day'}`, `
+    ${pageHead(`${greeting()}, ${esc(me.name.split(' ')[0])} <span class="wave">👋</span>`, `${fmtLong(o.date)}${o.work_day ? '' : ' · not a work day'}`, `
       <input type="date" id="date" value="${o.date}" style="width:170px">
       <button class="btn light" id="add-emp">${icon('plus')}Add employee</button>
       <a class="btn" href="/api/admin/report.csv?month=${o.date.slice(0, 7)}">${icon('download')}Export</a>`)}
@@ -1215,6 +1581,22 @@ async function viewOwnerDashboard(params) {
             ${tile('teal', 'Present', present, `${pct(present, total)}% of team`, { attrs: 'data-f="present"' })}
             ${tile('pink', 'Late', c('late') + c('very_late'), 'red penalties', { attrs: 'data-f="late"' })}
             ${tile('dark', isToday && c('waiting') ? 'Not checked in' : 'Absent', isToday && c('waiting') ? c('waiting') : c('absent'), c('leave') ? `${c('leave')} on leave` : '&nbsp;', { attrs: `data-f="${isToday && c('waiting') ? 'waiting' : 'absent'}"` })}
+          </div>
+        </div>
+
+        <div class="grid g2">
+          <div class="card" style="margin:0">
+            <div class="card-head"><h2>Team mood</h2><span class="chip">${md.count} shared</span></div>
+            ${md.count ? `<div class="row" style="gap:18px;align-items:flex-end">
+                <div><div class="mood-big float">${moodEmoji}</div><div class="strong num" style="margin-top:6px">${md.avg} / 5</div></div>
+                <div class="dist" style="flex:1">${md.dist.map((n, i) => `<div title="${n} × ${MOODS[i + 1][1]}"><i style="height:${Math.max(4, pct(n, Math.max(...md.dist)))}%;background:var(--${['pink', 'amber', 'slate', 'teal', 'lime'][i]})"></i>${MOODS[i + 1][0]}</div>`).join('')}</div></div>
+              ${md.by_department.length > 1 ? `<div class="chips mt">${md.by_department.map((x) => `<span class="chip ${x.avg < 2.6 ? 'pink' : x.avg >= 4 ? 'lime' : ''}">${MOODS[Math.round(x.avg)][0]} ${esc(x.department)} ${x.avg}</span>`).join('')}</div>` : ''}
+              ${md.avg < 2.6 ? `<div class="notice pink mt">${icon('alert')}Energy is low today. A coffee run or quick check-in could help.</div>` : ''}`
+              : empty('heart', 'Moods appear as people check in')}
+          </div>
+          <div class="card" style="margin:0">
+            <div class="card-head"><h2>Celebrations 🎈</h2><a class="btn sm light" href="#/wall">Wall</a></div>
+            ${celebrationsHtml(celebrations)}
           </div>
         </div>
 
@@ -1257,7 +1639,7 @@ async function viewOwnerDashboard(params) {
       ? `<div class="list">${rows
           .map(
             (x) => `<div class="list-item">${avatar(x.name)}
-              <div class="grow"><strong>${esc(x.name)}</strong><span>${esc(x.job_title || 'Staff')}${x.distance_m != null ? ` · ${Math.round(x.distance_m)} m away` : ''}</span></div>
+              <div class="grow"><strong>${esc(x.name)} ${x.mood ? `<i class="mood-inline" title="Mood: ${MOODS[x.mood][1]}">${MOODS[x.mood][0]}</i>` : ''}</strong><span>${esc(x.department || x.job_title || 'Staff')}${x.mode === 'remote' ? ' · 🌍 Remote' : x.distance_m != null ? ` · ${Math.round(x.distance_m)} m away` : ''}</span></div>
               <div class="tiny muted nowrap" style="text-align:right">${x.check_in_time ? `In ${fmtTime(x.check_in_time)}` : ''}${x.check_out_time ? `<br>Out ${fmtTime(x.check_out_time)}` : ''}</div>
               ${chip(STATUS, x.status)}
               ${x.check_in_time ? `<a class="icon-btn xs" href="#/staff?id=${x.id}" aria-label="Profile">${icon('arrow')}</a>` : `<button class="icon-btn xs" data-manual="${x.id}" data-name="${esc(x.name)}" aria-label="Record manually" title="Record manually">${icon('pen')}</button>`}
@@ -1268,6 +1650,7 @@ async function viewOwnerDashboard(params) {
         ? empty('users', 'Nobody matches this filter')
         : empty('users', 'No employees yet', `<button class="btn sm" id="add-emp-2">${icon('plus')}Add your first employee</button>`);
     $$('#board [data-manual]').forEach((b) => (b.onclick = () => manualAttendance(b.dataset.manual, b.dataset.name, o.date, r)));
+    if (filter !== 'all' || q) animateIn($('#board'));
     $('#add-emp-2')?.addEventListener('click', addEmployeeModal);
   };
   const setFilter = (k) => {
@@ -1289,7 +1672,12 @@ async function viewOwnerDashboard(params) {
   let updated = Date.now();
   const refreshFeed = async () => {
     const f = await api('/admin/feed').catch(() => null);
-    if (f && $('#feed')) { $('#feed').innerHTML = feedHtml(f); updated = Date.now(); }
+    if (f && $('#feed')) {
+      const before = $('#feed').firstElementChild?.outerHTML;
+      $('#feed').innerHTML = feedHtml(f);
+      if ($('#feed').firstElementChild?.outerHTML !== before) animateIn($('#feed'));
+      updated = Date.now();
+    }
   };
   $('#feed-refresh').onclick = (e) => act(e.currentTarget, refreshFeed);
   every(30000, refreshFeed);
@@ -1299,8 +1687,15 @@ async function viewOwnerDashboard(params) {
   });
 }
 
-function feedHtml(feed) {
-  if (!feed.length) return empty('activity', 'Activity will show up here');
+function feedHtml(raw) {
+  if (!raw.length) return empty('activity', 'Activity will show up here');
+  // Collapse runs of identical events (e.g. several absences recorded at once) into one row.
+  const feed = [];
+  for (const f of raw) {
+    const prev = feed[feed.length - 1];
+    if (prev && prev.type === f.type && prev.name === f.name && prev.detail === f.detail && f.type === 'points') prev.times = (prev.times || 1) + 1;
+    else feed.push({ ...f });
+  }
   return feed
     .map((f) => {
       let ico = 'clock';
@@ -1322,10 +1717,16 @@ function feedHtml(feed) {
         title = `Reward ${money(f.amount)} · ${METHODS[f.extra] || ''}`;
         tag = chip(REQ, f.detail);
         side = f.detail === 'pending' ? '<a class="chip amber" href="#/rewards">Review</a>' : '';
+      } else if (f.type === 'kudos') {
+        ico = 'heart';
+        const [em, label, cls] = KUDOS[f.detail] || ['🙌', 'Kudos', 'lime'];
+        title = `Sent kudos to ${esc(f.extra)}`;
+        tag = `<span class="chip ${cls}">${em} ${label}</span>`;
       } else {
         ico = f.detail === 'green' ? 'star' : f.detail === 'red' ? 'alert' : 'ban';
         title = esc(f.extra || 'Points updated');
-        tag = pointsChip(f.detail, Number(f.amount));
+        tag = pointsChip(f.detail, Number(f.amount) * (f.times || 1));
+        if (f.times) title += ` (×${f.times})`;
       }
       return `<div class="feed-item"><div class="when"><span class="ico">${icon(ico)}</span><span>${shortWhen(f.at)}</span></div>
         <div class="feed-card"><div class="top">${avatar(f.name, 'sm')}<div class="grow"><strong>${esc(f.name)}</strong><span>${title}</span></div></div>
@@ -1364,13 +1765,17 @@ function addEmployeeModal() {
       <label class="f">Username<input name="username" pattern="[A-Za-z0-9_.@\\-]{3,40}" title="3+ letters/numbers, no spaces" autocomplete="off" required></label>
       <label class="f">Password<div class="row"><input name="password" type="text" minlength="6" autocomplete="off" required>
         <button type="button" class="icon-btn sm" id="gen-pw" title="Generate" aria-label="Generate password">${icon('refresh')}</button></div></label>
-      <label class="f">Job title<input name="job_title" placeholder="e.g. Network Technician"></label>
+      <label class="f">Job title<input name="job_title" placeholder="e.g. Senior Designer"></label>
       <label class="f">Phone<input name="phone" inputmode="tel"></label>
+      <label class="f">Department<select name="department"><option value="">—</option>${(rules().departments || []).map((d) => `<option ${false ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
+      <label class="f">Birthday <span class="muted tiny">(optional)</span><input type="date" name="birthday" value="${''}"></label>
+      <label class="toggle full"><input type="checkbox" name="remote_allowed" >Allow remote check-in (shoots, client visits, WFH)</label>
       <div class="f full"><span>Role</span><div class="choice"><label><input type="radio" name="role" value="employee" checked>${icon('user')}Employee</label>
         <label><input type="radio" name="role" value="owner">${icon('key')}Owner / manager</label></div></div></div>`,
     submit: 'Add employee',
     onSubmit: async (data) => {
-      await api('/admin/users', { method: 'POST', body: data });
+      await api('/admin/users', { method: 'POST', body: { ...data, remote_allowed: !!data.remote_allowed } });
+      confetti({ count: 80 });
       staffCache = null;
       toast(`${data.name} added. Share: @${data.username} / ${data.password}`, 'success');
       route();
@@ -1383,21 +1788,22 @@ function addEmployeeModal() {
 }
 
 async function viewStaff(params) {
-  const users = await api('/admin/users');
+  const [users, st] = await Promise.all([api('/admin/users'), api('/admin/settings')]);
+  cachedRules = st;
   staffCache = users;
   let show = params.get('show') || 'active';
   let q = '';
   $('#app').innerHTML = `
     ${pageHead('Staff', `${users.filter((u) => u.active && u.role === 'employee').length} active employees`, `<button class="btn" id="add">${icon('plus')}Add employee</button>`)}
     <div class="card" style="margin-bottom:16px"><div class="row wrap between">
-      <div class="input-icon" style="flex:1;min-width:200px;max-width:360px">${icon('search')}<input id="q" placeholder="Search by name, username, job"></div>
+      <div class="input-icon" style="flex:1;min-width:200px;max-width:360px">${icon('search')}<input id="q" placeholder="Search by name, job, department"></div>
       <div class="seg" id="show">${['active', 'inactive', 'all'].map((s) => `<button type="button" data-s="${s}" class="${s === show ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div>
     </div></div>
     <div class="cards-grid" id="staff"></div>`;
   const draw = () => {
     const list = users
       .filter((u) => (show === 'all' ? true : show === 'active' ? u.active : !u.active))
-      .filter((u) => !q || `${u.name} ${u.username} ${u.job_title || ''}`.toLowerCase().includes(q));
+      .filter((u) => !q || `${u.name} ${u.username} ${u.job_title || ''} ${u.department || ''}`.toLowerCase().includes(q));
     $('#staff').innerHTML = list.length
       ? list
           .map(
@@ -1406,6 +1812,7 @@ async function viewStaff(params) {
                 <span class="muted small">${u.role === 'owner' ? 'Owner' : esc(u.job_title || 'Employee')}</span></div>
                 ${u.active ? '<span class="chip lime"><span class="dot"></span>Active</span>' : '<span class="chip slate">Inactive</span>'}</div>
               <div class="muted small mt row wrap" style="gap:14px"><span class="row" style="gap:6px">${icon('at')}${esc(u.username)}</span>${u.phone ? `<span class="row" style="gap:6px">${icon('phone')}${esc(u.phone)}</span>` : ''}</div>
+              ${u.department || u.remote_allowed ? `<div class="chips mt">${u.department ? `<span class="chip dept-chip">${esc(u.department)}</span>` : ''}${u.remote_allowed ? '<span class="chip sky">🌍 Remote OK</span>' : ''}</div>` : ''}
               ${u.balances ? `<div class="chips mt"><span class="chip lime">${u.balances.green} green</span><span class="chip pink">${u.balances.month.red} red</span><span class="chip dark">${u.balances.month.black} black</span></div>` : ''}
               <div class="row mt" style="gap:6px">
                 ${u.role === 'employee' ? `<a class="btn sm" href="#/staff?id=${u.id}">${icon('activity')}Profile</a>` : ''}
@@ -1444,10 +1851,14 @@ function editEmployee(u) {
       <label class="f full">Full name<input name="name" value="${esc(u.name)}" required></label>
       <label class="f">Job title<input name="job_title" value="${esc(u.job_title || '')}"></label>
       <label class="f">Phone<input name="phone" value="${esc(u.phone || '')}"></label>
+      <label class="f">Department<select name="department"><option value="">—</option>${(rules().departments || []).map((d) => `<option ${u.department === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
+      <label class="f">Birthday <span class="muted tiny">(optional)</span><input type="date" name="birthday" value="${esc(u.birthday || '')}"></label>
+      <label class="toggle full"><input type="checkbox" name="remote_allowed" ${u.remote_allowed ? 'checked' : ''}>Allow remote check-in (shoots, client visits, WFH)</label>
       <label class="f">Absences counted from<input type="date" name="start_date" value="${esc(u.start_date)}"></label>
       <label class="f">New password <span class="muted tiny">(leave empty to keep)</span><input name="password" type="text" minlength="6" autocomplete="off"></label></div>`,
     onSubmit: async (data) => {
       if (!data.password) delete data.password;
+      data.remote_allowed = !!data.remote_allowed;
       await api(`/admin/users/${u.id}`, { method: 'PATCH', body: data });
       staffCache = null;
       toast('Saved', 'success');
@@ -1645,9 +2056,16 @@ async function viewReport(params) {
   const month = params.get('month') || thisMonth();
   const [rep, s] = await Promise.all([api(`/admin/report?month=${month}`), api('/admin/settings')]);
   cachedRules = s;
+  const dept = params.get('dept') || '';
+  const depts = [...new Set(rep.rows.map((r) => r.department).filter(Boolean))].sort();
+  rep.rows = rep.rows.filter((r) => !dept || r.department === dept);
   const sum = (k) => rep.rows.reduce((a, r) => a + r[k], 0);
+  setTimeout(() => {
+    const el = $('#dept');
+    if (el) el.onchange = (e) => go(`#/reports?month=${month}${e.target.value ? `&dept=${encodeURIComponent(e.target.value)}` : ''}`);
+  });
   $('#app').innerHTML = `
-    ${pageHead('Monthly report', fmtMonth(month), `${monthInput(month, '#/reports')}
+    ${pageHead('Monthly report', fmtMonth(month), `${depts.length ? `<select id="dept" style="width:180px"><option value="">All departments</option>${depts.map((d) => `<option ${d === dept ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select>` : ''}${monthInput(month, '#/reports')}
       <button class="btn light" onclick="window.print()">${icon('printer')}Print</button>
       <a class="btn" href="/api/admin/report.csv?month=${month}">${icon('download')}Export CSV</a>`)}
     <div class="grid g4" style="margin-bottom:16px">
@@ -1661,7 +2079,7 @@ async function viewReport(params) {
         ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Present</th><th>Early</th><th>On time</th><th>Late</th><th>Leave</th><th>Green</th><th>Red</th><th>Black</th><th>Deduction</th></tr></thead><tbody>
           ${rep.rows
             .map(
-              (r) => `<tr><td><a href="#/staff?id=${r.user_id}&month=${month}" style="text-decoration:none" class="row">${avatar(r.name, 'sm')}<span><strong>${esc(r.name)}</strong>${r.active ? '' : ' <span class="chip slate">Inactive</span>'}</span></a></td>
+              (r) => `<tr><td><a href="#/staff?id=${r.user_id}&month=${month}" style="text-decoration:none" class="row">${avatar(r.name, 'sm')}<span><strong>${esc(r.name)}</strong>${r.active ? '' : ' <span class="chip slate">Inactive</span>'}<div class="tiny muted">${esc(r.department || '')}</div></span></a></td>
                 <td class="num">${r.days_present}</td><td class="num">${r.early}</td><td class="num">${r.on_time}</td><td class="num">${r.late}</td><td class="num">${r.leave_days}</td>
                 <td><span class="chip lime num">${r.green_month}</span></td><td><span class="chip pink num">${r.red}</span></td><td><span class="chip dark num">${r.black}</span></td>
                 <td class="num strong">${money(r.total_deduction)}</td></tr>`,
@@ -1709,6 +2127,13 @@ async function viewSettings() {
         <div class="f mt"><span>Work days <span class="muted tiny">(missing one without leave = automatic black)</span></span>
           <div class="choice">${DAYS.map((d, i) => `<label><input type="checkbox" name="wd" value="${i}" ${s.work_days.includes(i) ? 'checked' : ''}>${d.slice(0, 3)}</label>`).join('')}</div></div>
       </div>
+      <div class="card" style="margin:0"><div class="card-head"><h2>Team &amp; culture</h2><span class="muted small">Departments, kudos and recognition</span></div>
+        <div class="f"><span>Departments</span><div class="chips" id="depts">${s.departments.map((d) => `<span class="chip dept-chip" data-dept="${esc(d)}">${esc(d)} <button type="button" class="icon-btn xs ghost" style="width:20px;height:20px" aria-label="Remove">${icon('x')}</button></span>`).join('')}</div>
+          <div class="row mt" style="max-width:420px"><input id="new-dept" placeholder="Add a department, e.g. SEO"><button class="btn sm light" type="button" id="add-dept">${icon('plus')}Add</button></div></div>
+        <div class="form-grid mt">
+          <label class="f">Kudos each person can send per day<input type="number" name="kudos_daily_limit" value="${s.kudos_daily_limit}" min="0" max="50" required></label>
+          <label class="f">Green points per kudos received <span class="muted tiny">(0 = recognition only)</span><input type="number" name="kudos_green" value="${s.kudos_green}" min="0" max="10" required></label>
+        </div></div>
       <div class="card" style="margin:0"><div class="card-head"><h2>Money rules</h2></div>
         <div class="grid g4">
           <label class="tile pink" style="min-height:auto;gap:10px"><span class="t-title">Red penalty deduction</span><input type="number" name="red_value" value="${s.red_value}" min="0" required></label>
@@ -1730,6 +2155,18 @@ async function viewSettings() {
   };
   preview();
   form.oninput = () => { preview(); $('#dirty').textContent = 'Unsaved changes'; };
+  const bindDepts = () => $$('#depts [data-dept] button').forEach((b) => (b.onclick = () => { b.parentElement.remove(); $('#dirty').textContent = 'Unsaved changes'; }));
+  bindDepts();
+  const addDept = () => {
+    const v = $('#new-dept').value.trim();
+    if (!v || $$('#depts [data-dept]').some((c) => c.dataset.dept.toLowerCase() === v.toLowerCase())) return;
+    $('#depts').insertAdjacentHTML('beforeend', `<span class="chip dept-chip pop" data-dept="${esc(v)}">${esc(v)} <button type="button" class="icon-btn xs ghost" style="width:20px;height:20px" aria-label="Remove">${icon('x')}</button></span>`);
+    $('#new-dept').value = '';
+    $('#dirty').textContent = 'Unsaved changes';
+    bindDepts();
+  };
+  $('#add-dept').onclick = addDept;
+  $('#new-dept').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addDept(); } };
   form.onchange = form.oninput;
   $('#use-loc').onclick = (e) => act(e.currentTarget, async () => {
     const p = await getPosition();
@@ -1748,13 +2185,238 @@ async function viewSettings() {
       office_lat: d.office_lat === '' ? null : Number(d.office_lat),
       office_lng: d.office_lng === '' ? null : Number(d.office_lng),
     };
-    for (const k of ['radius_m', 'max_accuracy_m', 'very_late_reds', 'red_value', 'black_value', 'green_value', 'min_reward_points']) body[k] = Number(body[k]);
+    for (const k of ['radius_m', 'max_accuracy_m', 'very_late_reds', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'kudos_daily_limit', 'kudos_green']) body[k] = Number(body[k]);
+    body.departments = $$('#depts [data-dept]').map((c) => c.dataset.dept);
     act(e.submitter, async () => {
       const saved = await api('/admin/settings', { method: 'PUT', body });
       company = saved.company_name;
       route();
     }, 'Settings saved');
   };
+}
+
+// ---------- Culture: kudos, wall, people, profiles ----------
+
+async function kudosModal(toId = null, cat = 'creative') {
+  const people = (await api('/people')).filter((p) => p.id !== me.id);
+  modal({
+    title: 'Send kudos 🙌',
+    sub: me.role === 'owner' ? 'Recognise great work. It shows on the Team Wall for everyone.' : `Recognise a teammate. You can send ${rules().kudos_daily_limit ?? 3} a day.`,
+    body: `<div class="grid" style="gap:14px">
+      <label class="f">Teammate<select name="to_user_id" required><option value="">Choose…</option>${people
+        .map((p) => `<option value="${p.id}" ${p.id === toId ? 'selected' : ''}>${esc(p.name)}${p.department ? ` · ${esc(p.department)}` : ''}</option>`)
+        .join('')}</select></label>
+      <div class="f"><span>What for?</span><div class="cat-grid">${Object.entries(KUDOS)
+        .map(([k, [em, label, cls]]) => `<label class="${cls}"><input type="radio" name="category" value="${k}" ${k === (cat || 'creative') ? 'checked' : ''}><b>${em}</b>${label}</label>`)
+        .join('')}</div></div>
+      <label class="f">Message <span class="muted tiny">(optional)</span><textarea name="message" maxlength="280" placeholder="That reel you cut for the client was 🔥"></textarea></label>
+    </div>`,
+    submit: 'Send kudos',
+    onSubmit: async (d, form) => {
+      await api('/kudos', { method: 'POST', body: { ...d, to_user_id: Number(d.to_user_id) } });
+      burst(KUDOS[d.category][0], form.querySelector('[type=submit]'), 10);
+      confetti({ count: 90 });
+      chime('success');
+      toast('Kudos sent! 🙌', 'success');
+      if (['wall', 'person', 'profile', ''].includes(parseHash().path)) setTimeout(route, 250);
+    },
+  });
+}
+
+function kudoCard(k, { compact = false } = {}) {
+  const [em, label, cls] = KUDOS[k.category] || ['🙌', 'Kudos', 'lime'];
+  const canDelete = me.role === 'owner' || k.from_user === me.id;
+  const reacted = Object.fromEntries((k.reactions || []).map((r) => [r.emoji, r]));
+  return `<div class="card kudo" style="margin:0">
+    <div class="row">${avatar(k.from_name, 'sm')}<span class="small nowrap"><strong>${esc(k.from_name)}</strong> <span class="muted">→</span></span>
+      <a href="#/person?id=${k.to_user}" class="row" style="text-decoration:none;gap:8px">${avatar(k.to_name, 'sm')}<strong class="small">${esc(k.to_name)}</strong></a>
+      <span class="spacer"></span><span class="tiny muted nowrap">${relTime(k.created_at)}</span>
+      ${canDelete && !compact ? `<button class="icon-btn xs ghost" data-del-kudo="${k.id}" aria-label="Delete">${icon('x')}</button>` : ''}</div>
+    <div class="mt"><span class="kudo-tag ${cls}">${em} ${label}</span></div>
+    ${k.message ? `<p class="msg">${esc(k.message)}</p>` : '<div style="height:10px"></div>'}
+    ${compact ? '' : `<div class="reacts" data-kudo="${k.id}">${REACTIONS.map((e) => {
+      const r = reacted[e];
+      return `<button type="button" data-react="${e}" class="${r?.mine ? 'mine' : r ? '' : 'add'}">${e}${r ? ` <span class="num">${r.n}</span>` : ''}</button>`;
+    }).join('')}</div>`}
+  </div>`;
+}
+
+function bindKudoCards(root, reload) {
+  $$('[data-react]', root).forEach((b) => (b.onclick = async () => {
+    const id = b.closest('[data-kudo]').dataset.kudo;
+    try {
+      const r = await api(`/kudos/${id}/react`, { method: 'POST', body: { emoji: b.dataset.react } });
+      if (r.reacted) { burst(b.dataset.react, b, 6); haptic(15); }
+      reload();
+    } catch (err) { toast(err.message, 'error'); }
+  }));
+  $$('[data-del-kudo]', root).forEach((b) => (b.onclick = () => confirmBox('Delete this kudos?', 'It will be removed from the Team Wall.', async () => {
+    await api(`/kudos/${b.dataset.delKudo}`, { method: 'DELETE' });
+    reload();
+  }, { submit: 'Delete' })));
+}
+
+async function viewWall(params) {
+  const filter = params.get('f') || 'all';
+  const [wall, ann] = await Promise.all([
+    api(`/kudos${filter === 'mine' ? `?user_id=${me.id}` : ''}`),
+    api('/announcements'),
+  ]);
+  const limit = rules().kudos_daily_limit ?? 3;
+  const left = me.role === 'owner' ? '∞' : Math.max(0, limit - wall.sent_today);
+  $('#app').innerHTML = `
+    ${pageHead('Team Wall <span class="wave">🎉</span>', 'Shout-outs, wins and news from across the agency.', `
+      <div class="seg"><a href="#/wall" class="${filter === 'all' ? 'on' : ''}">Everyone</a><a href="#/wall?f=mine" class="${filter === 'mine' ? 'on' : ''}">Mine</a></div>
+      <button class="btn" data-kudos-to="">${icon('heart')}Send kudos</button>`)}
+    <div class="dash">
+      <div class="stack-col">
+        <div class="tile lime" style="min-height:auto">
+          <div class="row between wrap"><div><div class="t-title" style="max-width:none">Who made your day better? 💛</div>
+            <div class="t-sub" style="margin-top:4px">${me.role === 'owner' ? 'Recognition from the top means the most.' : `${left} kudos left today. They reset tomorrow.`}</div></div>
+            <div class="chips">${Object.entries(KUDOS).map(([k, [em, label]]) => `<button class="chip" type="button" data-kudos-to="" data-kudos-cat="${k}">${em} ${label}</button>`).join('')}</div></div>
+        </div>
+        <div class="grid" id="kudos" style="gap:12px">${
+          wall.rows.length ? wall.rows.map((k) => kudoCard(k)).join('') : `<div class="card">${empty('heart', 'No kudos yet. Be the first to say thanks!')}</div>`
+        }</div>
+      </div>
+      <div class="stack-col">
+        ${me.role === 'owner' ? `<div class="card"><div class="card-head"><h2>Post an announcement</h2>${icon('megaphone')}</div>
+          <form id="ann" class="grid" style="gap:12px">
+            <input name="title" maxlength="120" placeholder="e.g. Team lunch on Thursday 🍕" required>
+            <textarea name="body" maxlength="1000" placeholder="Details (optional)"></textarea>
+            <div class="choice">${Object.entries(ANNOUNCE).map(([k, [em, label]], i) => `<label><input type="radio" name="kind" value="${k}" ${i === 0 ? 'checked' : ''}>${em} ${label}</label>`).join('')}</div>
+            <div class="row between"><label class="toggle"><input type="checkbox" name="pinned">Pin to top of everyone's home</label><button class="btn" type="submit">Post</button></div>
+          </form></div>` : ''}
+        <div class="card"><div class="card-head"><h2>Announcements</h2></div>
+          <div class="grid" style="gap:10px">${ann.length ? ann.map((a) => announceHtml(a, me.role === 'owner')).join('') : empty('megaphone', 'No announcements yet')}</div></div>
+      </div>
+    </div>`;
+  bindKudoCards($('#kudos'), route);
+  bindAnnouncements($('#app'));
+  const form = $('#ann');
+  if (form) {
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const d = formData(form);
+      act(e.submitter, async () => {
+        await api('/admin/announcements', { method: 'POST', body: { ...d, pinned: !!d.pinned } });
+        if (d.kind === 'celebration') confetti();
+        route();
+      }, 'Announcement posted');
+    };
+  }
+}
+
+function announceHtml(a, manage = false, dismissible = false) {
+  const [em, label, cls] = ANNOUNCE[a.kind] || ANNOUNCE.news;
+  return `<div class="announce ${cls}" data-ann="${a.id}"><span class="em float">${em}</span>
+    <div style="flex:1;min-width:0"><div class="row wrap" style="gap:6px"><h3>${esc(a.title)}</h3>${a.pinned ? '<span class="chip">📌 Pinned</span>' : ''}</div>
+      ${a.body ? `<p>${esc(a.body)}</p>` : ''}<div class="tiny" style="opacity:.7;margin-top:6px">${label} · ${esc(a.author || 'Team')} · ${relTime(a.created_at)}</div></div>
+    ${manage ? `<div class="row" style="gap:4px"><button class="icon-btn xs" data-pin="${a.id}" data-pinned="${a.pinned}" title="${a.pinned ? 'Unpin' : 'Pin'}" aria-label="Pin">📌</button>
+      <button class="icon-btn xs" data-del-ann="${a.id}" aria-label="Delete">${icon('x')}</button></div>` : ''}
+    ${dismissible ? `<button class="icon-btn xs ghost" data-dismiss="${a.id}" aria-label="Dismiss">${icon('x')}</button>` : ''}</div>`;
+}
+
+function bindAnnouncements(root) {
+  $$('[data-pin]', root).forEach((b) => (b.onclick = () => act(b, async () => {
+    await api(`/admin/announcements/${b.dataset.pin}`, { method: 'PATCH', body: { pinned: b.dataset.pinned !== '1' } });
+    route();
+  })));
+  $$('[data-del-ann]', root).forEach((b) => (b.onclick = () => confirmBox('Delete announcement?', 'Everyone will stop seeing it.', async () => {
+    await api(`/admin/announcements/${b.dataset.delAnn}`, { method: 'DELETE' });
+    route();
+  }, { submit: 'Delete' })));
+}
+
+async function viewPeople(params) {
+  const people = await api('/people');
+  const depts = [...new Set(people.map((p) => p.department).filter(Boolean))].sort();
+  let dept = params.get('dept') || '';
+  let q = '';
+  const today = localISODate();
+  const soon = upcomingCelebrations(people, today, 14);
+  $('#app').innerHTML = `
+    ${pageHead('People', `${people.length} people across ${depts.length || 1} department${depts.length === 1 ? '' : 's'}`, `<button class="btn" data-kudos-to="">${icon('heart')}Send kudos</button>`)}
+    <div class="card" style="margin-bottom:16px"><div class="row wrap between">
+      <div class="input-icon" style="flex:1;min-width:200px;max-width:360px">${icon('search')}<input id="q" placeholder="Search people"></div>
+      <div class="seg" id="depts"><button type="button" data-d="" class="on">All</button>${depts.map((d) => `<button type="button" data-d="${esc(d)}">${esc(d)}</button>`).join('')}</div>
+    </div></div>
+    <div class="cards-grid" id="people"></div>`;
+  const draw = () => {
+    const list = people.filter((p) => (!dept || p.department === dept) && (!q || `${p.name} ${p.job_title || ''} ${p.department || ''}`.toLowerCase().includes(q)));
+    $('#people').innerHTML = list.length
+      ? list.map((p) => {
+          const c = soon.find((x) => x.p.id === p.id);
+          return `<div class="card" style="margin:0">
+            <a href="#/person?id=${p.id}" class="row" style="text-decoration:none">${avatar(p.name, 'lg')}<div style="flex:1;min-width:0"><strong>${esc(p.name)}</strong>
+              <div class="muted small">${p.role === 'owner' ? 'Owner' : esc(p.job_title || 'Team member')}</div></div></a>
+            <div class="chips mt">${p.department ? `<span class="chip dept-chip">${esc(p.department)}</span>` : ''}${p.kudos_month ? `<span class="chip lime">🙌 ${p.kudos_month} this month</span>` : ''}
+              ${c ? `<span class="chip pink">${c.kind === 'birthday' ? '🎂' : '🏆'} ${c.inDays === 0 ? 'Today' : fmtDate(c.date)}</span>` : ''}</div>
+            ${p.id !== me.id ? `<div class="row mt"><button class="btn sm" data-kudos-to="${p.id}">${icon('heart')}Kudos</button><a class="btn sm light" href="#/person?id=${p.id}">Profile</a></div>` : ''}
+          </div>`;
+        }).join('')
+      : `<div class="card" style="grid-column:1/-1">${empty('users', 'No one matches')}</div>`;
+    animateIn($('#people'));
+  };
+  $$('#depts button').forEach((b) => (b.onclick = () => {
+    dept = b.dataset.d;
+    $$('#depts button').forEach((x) => x.classList.toggle('on', x === b));
+    draw();
+  }));
+  $('#q').oninput = (e) => { q = e.target.value.trim().toLowerCase(); draw(); };
+  draw();
+}
+
+async function viewPerson(params) {
+  const id = Number(params.get('id')) || me.id;
+  const [p, wall] = await Promise.all([api(`/people/${id}`), api(`/kudos?user_id=${id}`)]);
+  const isMe = p.id === me.id;
+  if (isMe) checkMilestones(p);
+  const L = p.level;
+  const fill = L.to ? pct(L.xp - L.from, L.to - L.from) : 100;
+  const received = wall.rows.filter((k) => k.to_user === id);
+  const unlocked = p.badges.filter((b) => b.unlocked).length;
+  $('#app').innerHTML = `
+    ${pageHead(isMe ? 'My Profile' : esc(p.name), isMe ? 'Your level, badges and kudos' : esc(p.job_title || 'Team member'),
+      isMe ? `<a class="btn light" href="#/account">${icon('settings')}Account</a>` : `<button class="btn" data-kudos-to="${p.id}">${icon('heart')}Send kudos</button>
+      ${me.role === 'owner' && p.role === 'employee' ? `<a class="btn light" href="#/staff?id=${p.id}">${icon('activity')}Attendance</a>` : ''}`)}
+    <div class="dash">
+      <div class="stack-col">
+        <div class="card">
+          <div class="profile">
+            <div class="photo ${hue(p.name)}">${esc(initials(p.name))}</div>
+            <div class="meta">
+              <div><h2>${esc(p.name)}</h2><p class="muted small">${p.role === 'owner' ? 'Owner' : esc(p.job_title || 'Team member')}${p.department ? ` · ${esc(p.department)}` : ''}</p></div>
+              <div class="row wrap" style="gap:8px"><span class="level-chip"><b>${L.level}</b>${esc(L.name)}</span>
+                ${p.streak ? `<span class="chip pink">🔥 ${p.streak}-day streak</span>` : ''}<span class="chip lime">🏅 ${unlocked} badge${unlocked === 1 ? '' : 's'}</span></div>
+              <div class="info"><span>${icon('calendar')}Since ${fmtDate(p.start_date, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                ${p.birthday ? `<span>🎂 ${fmtDate(`2000-${p.birthday}`, { day: 'numeric', month: 'long' })}</span>` : ''}</div>
+            </div>
+          </div>
+          <div class="mt"><div class="row between small"><span class="strong num">${L.xp.toLocaleString('en-US')} XP</span>
+            <span class="muted">${L.to ? `${(L.to - L.xp).toLocaleString('en-US')} XP to ${esc(L.next_name)}` : 'Max level 👑'}</span></div>
+            <div class="xp-bar" style="margin-top:8px"><i style="width:${Math.max(3, fill)}%"></i></div></div>
+          <div class="kpis">
+            ${kpi('Days present', p.stats.present, 'teal', Math.min(100, p.stats.present))}
+            ${kpi('Kudos received', p.stats.kudos_in, 'lime', Math.min(100, p.stats.kudos_in * 10))}
+            ${kpi('Kudos given', p.stats.kudos_out, 'pink', Math.min(100, p.stats.kudos_out * 10))}
+          </div>
+        </div>
+        <div class="card"><div class="card-head"><h2>Badges</h2><span class="chip">${unlocked}/${p.badges.length}</span></div>${badgesGrid(p.badges)}</div>
+      </div>
+      <div class="stack-col">
+        <div class="card"><div class="card-head"><h2>How XP works</h2></div>
+          <div class="list small">
+            <div class="list-item"><span class="avatar sm teal">📍</span><div class="grow"><strong>+10 XP</strong><span>every day you show up</span></div></div>
+            <div class="list-item"><span class="avatar sm lime">🐦</span><div class="grow"><strong>+15 XP</strong><span>every early check-in</span></div></div>
+            <div class="list-item"><span class="avatar sm pink">🙌</span><div class="grow"><strong>+20 XP</strong><span>every kudos you receive</span></div></div>
+            <div class="list-item"><span class="avatar sm sky">💌</span><div class="grow"><strong>+5 XP</strong><span>every kudos you give</span></div></div>
+            <div class="list-item"><span class="avatar sm amber">🏅</span><div class="grow"><strong>+50 XP</strong><span>every badge unlocked</span></div></div>
+          </div></div>
+        <div class="card"><div class="card-head"><h2>Kudos received</h2><span class="chip">${received.length}</span></div>
+          <div class="grid" id="pk" style="gap:10px">${received.length ? received.slice(0, 8).map((k) => kudoCard(k, { compact: true })).join('') : empty('heart', isMe ? 'Your first kudos is on its way' : 'No kudos yet. Send the first one!')}</div></div>
+      </div>
+    </div>`;
 }
 
 start();

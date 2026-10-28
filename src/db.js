@@ -72,6 +72,41 @@ CREATE TABLE IF NOT EXISTS leave_requests (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Culture / engagement
+ALTER TABLE users ADD COLUMN IF NOT EXISTS department TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS birthday TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS remote_allowed INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE attendance ADD COLUMN IF NOT EXISTS mood INTEGER;
+ALTER TABLE attendance ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'office';
+
+CREATE TABLE IF NOT EXISTS kudos (
+  id SERIAL PRIMARY KEY,
+  from_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category TEXT NOT NULL,
+  message TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS kudos_to ON kudos (to_user, created_at);
+CREATE INDEX IF NOT EXISTS kudos_from ON kudos (from_user, created_at);
+
+CREATE TABLE IF NOT EXISTS kudos_reactions (
+  kudos_id INTEGER NOT NULL REFERENCES kudos(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL,
+  PRIMARY KEY (kudos_id, user_id, emoji)
+);
+
+CREATE TABLE IF NOT EXISTS announcements (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT,
+  kind TEXT NOT NULL DEFAULT 'news',
+  pinned INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS reward_requests (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -113,6 +148,10 @@ const DEFAULT_SETTINGS = {
   black_value: 1000,
   green_value: 50,
   min_reward_points: 10,
+  // Culture
+  departments: ['Creative', 'Content', 'Social Media', 'Media Buying', 'Design', 'Video Production', 'Account Management', 'Development', 'Operations'],
+  kudos_daily_limit: 3,
+  kudos_green: 0,
 };
 
 // SQL is written with `?` placeholders and converted to Postgres' $1, $2, ...

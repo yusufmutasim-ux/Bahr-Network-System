@@ -29,6 +29,16 @@ Staff attendance and management system for Bahr Network. It covers GPS check-in,
 - **Monthly report:** present, early, on-time, late, leave, green, red and black counts, plus deductions per employee. Can be exported to CSV for Excel.
 - **Settings:** office location (with a "use my current location" button), radius, GPS accuracy, check-in times, work days, money values and currency.
 
+**Culture & engagement** (built for a creative / marketing agency)
+- **Team Wall:** anyone can send **kudos** to a teammate (💡 Creative Spark, 🤝 Team Player, 🚀 Extra Mile, 🎯 Client Hero, 😄 Good Vibes, 🧠 Mentor) and react with emojis. There's a daily limit, and the owner can optionally award green points per kudos.
+- **Announcements** from the owner (news, celebrations, events, alerts), with pinning to everyone's home page.
+- **Departments** with a monthly **department battle** leaderboard, plus a "most appreciated" ranking.
+- **XP levels** (Fresh Intern → Legend) and **badges** (Early Bird, On Fire, Flawless Month, Kudos Magnet, …), with a celebration when you level up or unlock one.
+- **Mood check-in** after arriving. The owner sees team mood by department and gets a low-energy warning.
+- **Birthdays & work anniversaries** shown to the whole team, with a personal birthday celebration.
+- **Remote check-in** per person (shoots, client visits, WFH): no geofence, and the distance is still recorded.
+- Thought-of-the-day, confetti, emoji bursts, count-up numbers, staggered animations, soft sounds and haptics. Sound can be turned off in Account, and everything respects reduced-motion settings.
+
 **Experience**
 - Modern dashboard UI with a collapsible sidebar, a live activity feed, a 7-day attendance chart and a filterable attendance board.
 - **Dark mode** (follows the system, or choose in Account).

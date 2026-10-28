@@ -180,6 +180,57 @@ test('feed, leaderboard, streak and trend', async () => {
   assert.equal(o.trend.length, 7);
 });
 
+test('culture: kudos, reactions, limits, mood, announcements, achievements', async () => {
+  clock = cairo('2026-01-13', '09:30');
+  const people = (await emp('/people')).body;
+  const boss = people.find((p) => p.role === 'owner');
+  const race = people.find((p) => p.name === 'Race');
+  assert.ok(boss && race);
+  assert.equal((await emp('/kudos', { method: 'POST', body: { to_user_id: empId, category: 'creative' } })).status, 400);
+  const k = await emp('/kudos', { method: 'POST', body: { to_user_id: race.id, category: 'creative', message: 'Great reel!' } });
+  assert.equal(k.status, 201);
+  await emp('/kudos', { method: 'POST', body: { to_user_id: race.id, category: 'teamwork' } });
+  await emp('/kudos', { method: 'POST', body: { to_user_id: boss.id, category: 'mentor' } });
+  assert.equal((await emp('/kudos', { method: 'POST', body: { to_user_id: race.id, category: 'good_vibes' } })).status, 429);
+  assert.equal((await owner('/kudos', { method: 'POST', body: { to_user_id: empId, category: 'client_hero' } })).status, 201);
+  assert.equal((await owner(`/kudos/${k.body.id}/react`, { method: 'POST', body: { emoji: '🔥' } })).body.reacted, true);
+  const wall = (await emp('/kudos')).body;
+  assert.equal(wall.sent_today, 3);
+  assert.deepEqual(wall.rows.find((r) => r.id === k.body.id).reactions, [{ emoji: '🔥', n: 1, mine: false }]);
+  assert.equal((await owner(`/kudos/${k.body.id}/react`, { method: 'POST', body: { emoji: '🔥' } })).body.reacted, false);
+
+  assert.equal((await emp('/me/mood', { method: 'POST', body: { mood: 4 } })).status, 400); // not checked in on 13th
+  await emp('/me/check-in', { method: 'POST', body: NEAR });
+  assert.equal((await emp('/me/mood', { method: 'POST', body: { mood: 4 } })).status, 200);
+  const o = (await owner('/admin/overview')).body;
+  assert.equal(o.mood.avg, 4);
+
+  const a = await owner('/admin/announcements', { method: 'POST', body: { title: 'Team lunch Thursday 🍕', kind: 'event', pinned: true } });
+  assert.equal(a.status, 201);
+  assert.equal((await emp('/admin/announcements', { method: 'POST', body: { title: 'x' } })).status, 403);
+  assert.equal((await emp('/announcements')).body[0].title, 'Team lunch Thursday 🍕');
+
+  const ach = (await emp('/me/achievements')).body;
+  assert.ok(ach.level.xp > 0);
+  assert.ok(ach.badges.find((b) => b.key === 'cheerleader').progress === 3);
+  const profile = (await emp(`/people/${race.id}`)).body;
+  assert.equal(profile.kudos.length, 2);
+  const lb = (await emp('/leaderboard?month=2026-01')).body;
+  assert.ok(Array.isArray(lb.departments) && lb.kudos[0].name === 'Race');
+});
+
+test('remote-enabled staff can check in away from the office', async () => {
+  const add = await owner('/admin/users', { method: 'POST', body: { name: 'Shooter', username: 'shooter', password: 'pass123', remote_allowed: true, department: 'Video Production' } });
+  const c = client();
+  await c('/login', { method: 'POST', body: { username: 'shooter', password: 'pass123' } });
+  clock = cairo('2026-01-14', '09:00');
+  const r = await c('/me/check-in', { method: 'POST', body: FAR });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.attendance.mode, 'remote');
+  assert.ok(r.body.attendance.distance_m > 1000);
+  assert.ok(add.body.id);
+});
+
 test('rejects non-JSON writes', async () => {
   const res = await fetch(`${base}/api/login`, { method: 'POST', body: 'username=a&password=b', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
   assert.equal(res.status, 415);
