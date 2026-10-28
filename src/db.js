@@ -139,7 +139,16 @@ function wrap(conn, txFn) {
   return db;
 }
 
-function connect(url = process.env.DATABASE_URL || process.env.POSTGRES_URL, { pgliteDir } = {}) {
+// Vercel's Neon integration may add a custom prefix (e.g. STORAGE_DATABASE_URL), so accept those too.
+function databaseUrl(env = process.env) {
+  if (env.DATABASE_URL || env.POSTGRES_URL) return env.DATABASE_URL || env.POSTGRES_URL;
+  const key = Object.keys(env)
+    .filter((k) => /(^|_)(DATABASE_URL|POSTGRES_URL)$/.test(k) && /^postgres(ql)?:\/\//.test(env[k] || ''))
+    .sort((a, b) => Number(b.endsWith('DATABASE_URL')) - Number(a.endsWith('DATABASE_URL')))[0];
+  return key ? env[key] : undefined;
+}
+
+function connect(url = databaseUrl(), { pgliteDir } = {}) {
   let impl;
   if (url) {
     const { Pool } = require('pg');
@@ -221,4 +230,4 @@ async function saveSettings(db, settings) {
   );
 }
 
-module.exports = { connect, getSettings, saveSettings, DEFAULT_SETTINGS };
+module.exports = { connect, databaseUrl, getSettings, saveSettings, DEFAULT_SETTINGS };
