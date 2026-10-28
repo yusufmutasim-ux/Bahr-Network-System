@@ -1,0 +1,155 @@
+const { test, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const { openDb } = require('../src/db');
+const { createApp } = require('../src/app');
+const { runAbsenceJob, classifyCheckIn, distanceMeters } = require('../src/logic');
+const { getSettings } = require('../src/db');
+
+// Office at a fixed point; "near" is ~50 m away, "far" is ~1.1 km away.
+const OFFICE = { lat: 27.9158, lng: 34.33 };
+const NEAR = { lat: 27.9162, lng: 34.33, accuracy: 20 };
+const FAR = { lat: 27.9258, lng: 34.33, accuracy: 20 };
+
+// Cairo is UTC+2 (or +3 in summer); build a Date for a given Cairo wall-clock time.
+function cairo(date, time) {
+  for (const offset of [2, 3]) {
+    const d = new Date(`${date}T${time}:00+0${offset}:00`);
+    const local = new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d);
+    if (local === time) return d;
+  }
+  throw new Error('bad time');
+}
+
+let server;
+let base;
+let db;
+let clock = cairo('2026-01-04', '09:00'); // Sunday
+
+function client() {
+  let cookie = '';
+  return async (path, { method = 'GET', body } = {}) => {
+    const res = await fetch(`${base}/api${path}`, {
+      method,
+      headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const set = res.headers.get('set-cookie');
+    if (set) cookie = set.split(';')[0];
+    const text = await res.text();
+    return { status: res.status, body: text.startsWith('{') || text.startsWith('[') ? JSON.parse(text) : text };
+  };
+}
+
+const owner = client();
+const emp = client();
+let empId;
+
+before(async () => {
+  db = openDb(':memory:');
+  const app = createApp(db, { now: () => clock });
+  await new Promise((r) => (server = app.listen(0, r)));
+  base = `http://127.0.0.1:${server.address().port}`;
+});
+
+after(() => server.close());
+
+test('pure rules', () => {
+  const s = getSettings(db);
+  assert.equal(classifyCheckIn('07:30', s).status, 'early');
+  assert.equal(classifyCheckIn('09:59', s).status, 'on_time');
+  assert.deepEqual(classifyCheckIn('10:30', s), { status: 'late', green: 0, red: 1 });
+  assert.deepEqual(classifyCheckIn('11:15', s), { status: 'very_late', green: 0, red: 2 });
+  assert.throws(() => classifyCheckIn('06:00', s));
+  assert.throws(() => classifyCheckIn('12:00', s));
+  assert.ok(Math.abs(distanceMeters(0, 0, 0, 1) - 111195) < 10);
+});
+
+test('setup, settings and staff', async () => {
+  assert.equal((await owner('/setup')).body.needsSetup, true);
+  assert.equal((await owner('/setup', { method: 'POST', body: { name: 'Boss', username: 'boss', password: 'secret1' } })).status, 201);
+  assert.equal((await owner('/setup', { method: 'POST', body: { name: 'X', username: 'x', password: 'secret1' } })).status, 409);
+  const s = (await owner('/admin/settings')).body;
+  const put = await owner('/admin/settings', { method: 'PUT', body: { ...s, office_lat: OFFICE.lat, office_lng: OFFICE.lng } });
+  assert.equal(put.status, 200);
+  const bad = await owner('/admin/settings', { method: 'PUT', body: { ...s, early_end: '06:00' } });
+  assert.equal(bad.status, 400);
+  const add = await owner('/admin/users', { method: 'POST', body: { name: 'Omar', username: 'omar', password: 'pass123' } });
+  assert.equal(add.status, 201);
+  empId = add.body.id;
+  assert.equal((await emp('/login', { method: 'POST', body: { username: 'omar', password: 'nope' } })).status, 401);
+  assert.equal((await emp('/login', { method: 'POST', body: { username: 'omar', password: 'pass123' } })).status, 200);
+  assert.equal((await emp('/admin/users')).status, 403);
+});
+
+test('early check-in gives a green point, geofence enforced', async () => {
+  clock = cairo('2026-01-04', '07:30');
+  const far = await emp('/me/check-in', { method: 'POST', body: FAR });
+  assert.equal(far.status, 400);
+  assert.match(far.body.error, /from the office/);
+  const ok = await emp('/me/check-in', { method: 'POST', body: NEAR });
+  assert.equal(ok.status, 201);
+  assert.equal(ok.body.attendance.status, 'early');
+  assert.equal(ok.body.green, 1);
+  assert.equal((await emp('/me/check-in', { method: 'POST', body: NEAR })).status, 409);
+  assert.equal((await emp('/me/check-out', { method: 'POST', body: {} })).status, 200);
+});
+
+test('late check-in gives red, redeem swaps green for red', async () => {
+  clock = cairo('2026-01-05', '10:15');
+  const r = await emp('/me/check-in', { method: 'POST', body: NEAR });
+  assert.equal(r.body.red, 1);
+  let d = (await emp('/me/dashboard')).body;
+  assert.equal(d.balances.green, 1);
+  assert.equal(d.balances.month.red, 1);
+  assert.equal(d.deductions.total, 250);
+  assert.equal((await emp('/me/redeem', { method: 'POST', body: {} })).status, 200);
+  d = (await emp('/me/dashboard')).body;
+  assert.equal(d.balances.green, 0);
+  assert.equal(d.deductions.total, 0);
+  assert.equal((await emp('/me/redeem', { method: 'POST', body: {} })).status, 400);
+});
+
+test('absences become black points unless leave is approved', async () => {
+  // Jan 6 (Tue) & Jan 7 (Wed) missed, Jan 8 (Thu) after close.
+  const leave = await emp('/me/leaves', { method: 'POST', body: { from_date: '2026-01-07', to_date: '2026-01-07', reason: 'Sick leave' } });
+  assert.equal(leave.status, 201);
+  clock = cairo('2026-01-08', '12:30');
+  const s = getSettings(db);
+  assert.equal(runAbsenceJob(db, s, clock), 3); // 6th, 7th (leave still pending), 8th
+  assert.equal(runAbsenceJob(db, s, clock), 0); // idempotent
+  assert.equal((await owner(`/admin/leaves/${leave.body.id}/decision`, { method: 'POST', body: { decision: 'approve' } })).status, 200);
+  assert.equal(runAbsenceJob(db, s, clock), 0);
+  const d = (await emp('/me/dashboard')).body;
+  assert.equal(d.balances.month.black, 2);
+  assert.equal(d.deductions.total, 2000);
+  // Manual attendance clears the absence for that day.
+  assert.equal((await owner('/admin/attendance', { method: 'POST', body: { user_id: empId, work_date: '2026-01-06', time: '09:00', status: 'on_time' } })).status, 201);
+  const rep = (await owner('/admin/report?month=2026-01')).body.rows[0];
+  assert.equal(rep.black, 1);
+  assert.equal(rep.leave_days, 1);
+  assert.equal(rep.days_present, 3);
+  assert.equal(rep.total_deduction, 1000);
+  // Friday Jan 9 is not a work day: no black.
+  clock = cairo('2026-01-10', '07:10');
+  assert.equal(runAbsenceJob(db, s, clock), 0);
+});
+
+test('owner adjusts points and reward requests reserve/refund points', async () => {
+  const adj = await owner('/admin/points', { method: 'POST', body: { user_id: empId, kind: 'green', delta: 12, reason: 'Great month' } });
+  assert.equal(adj.status, 201);
+  assert.equal((await owner('/admin/points', { method: 'POST', body: { user_id: empId, kind: 'green', delta: 1 } })).status, 400);
+  assert.equal((await emp('/me/rewards', { method: 'POST', body: { points: 5, method: 'instapay', payout_number: '01012345678' } })).status, 400);
+  const req = await emp('/me/rewards', { method: 'POST', body: { points: 10, method: 'vodafone_cash', payout_number: '01012345678' } });
+  assert.equal(req.status, 201);
+  assert.equal(req.body.amount, 500);
+  assert.equal((await emp('/me/dashboard')).body.balances.green, 2);
+  await owner(`/admin/rewards/${req.body.id}/decision`, { method: 'POST', body: { decision: 'reject' } });
+  assert.equal((await emp('/me/dashboard')).body.balances.green, 12);
+  const csv = await owner('/admin/report.csv?month=2026-01');
+  assert.match(csv.body, /Total deduction/);
+});
+
+test('rejects non-JSON writes', async () => {
+  const res = await fetch(`${base}/api/login`, { method: 'POST', body: 'username=a&password=b', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+  assert.equal(res.status, 415);
+});

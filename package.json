@@ -1,0 +1,18 @@
+{
+  "name": "bahr-network-system",
+  "version": "1.0.0",
+  "description": "Bahr Network attendance & staff management system: GPS check-in, green/red/black points, deductions, leaves and rewards.",
+  "main": "src/server.js",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
