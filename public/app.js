@@ -989,7 +989,7 @@ function viewLogin() {
       <label class="f">Password<div class="input-icon">${icon('key')}<input name="password" type="password" autocomplete="current-password" required></div></label>
       <button class="btn block xl" type="submit" style="margin-top:6px">${icon('login')}Sign in</button>
       <div id="login-msg"></div>
-      <p class="muted tiny" style="text-align:center">${icon('lock')} For security, your account works only on the first device you sign in from.</p>
+      <p class="muted tiny" style="text-align:center">${icon('lock')} For security, your account works on one phone and one laptop: the first ones you sign in from.</p>
     </form>`);
   $('#login').onsubmit = async (e) => {
     e.preventDefault();
@@ -1909,14 +1909,18 @@ async function viewStaff(params) {
                 ${u.active ? '<span class="chip lime"><span class="dot"></span>Active</span>' : '<span class="chip slate">Inactive</span>'}</div>
               <div class="muted small mt row wrap" style="gap:14px"><span class="row" style="gap:6px">${icon('at')}${esc(u.username)}</span>${u.phone ? `<span class="row" style="gap:6px">${icon('phone')}${esc(u.phone)}</span>` : ''}</div>
               ${u.department || u.remote_allowed ? `<div class="chips mt">${u.department ? `<span class="chip dept-chip">${esc(u.department)}</span>` : ''}${u.remote_allowed ? '<span class="chip sky">🌍 Remote OK</span>' : ''}</div>` : ''}
-              ${u.role === 'employee' ? `<div class="chips mt">${u.device_bound
-                ? `<span class="chip teal" title="Linked ${u.device_bound_at ? relTime(u.device_bound_at) : ''}">${icon('lock')}${esc(u.device_label || 'Device linked')}</span>`
-                : '<span class="chip">📱 No device yet</span>'}${Number(u.device_blocks) ? `<span class="chip pink" title="Blocked login attempts in the last 30 days">⚠️ ${u.device_blocks} blocked</span>` : ''}</div>` : ''}
+              ${u.role === 'employee' ? `<div class="chips mt">${['mobile', 'desktop'].map((k) => {
+                const d = (u.devices || []).find((x) => x.kind === k);
+                const em = k === 'mobile' ? '📱' : '💻';
+                return d
+                  ? `<span class="chip teal" title="Linked ${relTime(d.bound_at)}${d.last_seen_at ? ` · last used ${relTime(d.last_seen_at)}` : ''}">${em} ${esc(d.label || 'Linked')}</span>`
+                  : `<span class="chip">${em} ${k === 'mobile' ? 'No phone yet' : 'No laptop yet'}</span>`;
+              }).join('')}${Number(u.device_blocks) ? `<span class="chip pink" title="Blocked login attempts in the last 30 days">⚠️ ${u.device_blocks} blocked</span>` : ''}</div>` : ''}
               ${u.balances ? `<div class="chips mt"><span class="chip lime">${u.balances.green} green</span><span class="chip pink">${u.balances.month.red} red</span><span class="chip dark">${u.balances.month.black} black</span></div>` : ''}
               <div class="row mt" style="gap:6px">
                 ${u.role === 'employee' ? `<a class="btn sm" href="#/staff?id=${u.id}">${icon('activity')}Profile</a>` : ''}
                 <button class="btn sm light" data-edit="${u.id}">${icon('pen')}Edit</button>
-                ${u.role === 'employee' && u.device_bound ? `<button class="icon-btn sm" data-reset-dev="${u.id}" aria-label="Reset device" title="Reset device">${icon('phoneLock')}</button>` : ''}
+                ${u.role === 'employee' && (u.devices || []).length ? `<button class="icon-btn sm" data-reset-dev="${u.id}" aria-label="Reset device" title="Reset device">${icon('phoneLock')}</button>` : ''}
                 ${u.id !== me.id ? `<button class="icon-btn sm" data-toggle="${u.id}" aria-label="${u.active ? 'Deactivate' : 'Activate'}" title="${u.active ? 'Deactivate' : 'Activate'}">${icon(u.active ? 'ban' : 'check')}</button>` : ''}
               </div></div>`,
           )
@@ -1925,11 +1929,22 @@ async function viewStaff(params) {
     $$('[data-edit]').forEach((b) => (b.onclick = () => editEmployee(users.find((x) => x.id === Number(b.dataset.edit)))));
     $$('[data-reset-dev]').forEach((b) => (b.onclick = () => {
       const u = users.find((x) => x.id === Number(b.dataset.resetDev));
-      confirmBox(`Reset ${u.name}'s device?`, `They'll be signed out. The next device they log in from (e.g. a new phone) becomes their only allowed device.`, async () => {
-        await api(`/admin/users/${u.id}`, { method: 'PATCH', body: { reset_device: true } });
-        toast('Device reset. They can log in from their new device now', 'success');
-        route();
-      }, { submit: 'Reset device' });
+      const has = (k) => (u.devices || []).find((d) => d.kind === k);
+      modal({
+        title: `Reset ${u.name}'s device`,
+        sub: 'Use this when they change phones or laptops. They are signed out on that device, and the next one they sign in from gets registered.',
+        body: `<div class="choice">
+          ${has('mobile') ? `<label><input type="radio" name="which" value="mobile" checked>📱 Phone · ${esc(has('mobile').label || '')}</label>` : ''}
+          ${has('desktop') ? `<label><input type="radio" name="which" value="desktop" ${has('mobile') ? '' : 'checked'}>💻 Laptop · ${esc(has('desktop').label || '')}</label>` : ''}
+          ${has('mobile') && has('desktop') ? '<label><input type="radio" name="which" value="all">Both</label>' : ''}</div>`,
+        submit: 'Reset',
+        danger: true,
+        onSubmit: async (d) => {
+          await api(`/admin/users/${u.id}`, { method: 'PATCH', body: { reset_device: d.which === 'all' ? true : d.which } });
+          toast('Device reset. They can sign in from the new device now', 'success');
+          route();
+        },
+      });
     }));
     $$('[data-toggle]').forEach((b) => (b.onclick = () => {
       const u = users.find((x) => x.id === Number(b.dataset.toggle));
@@ -2264,7 +2279,7 @@ async function viewSettings() {
         <div class="f"><span>Departments</span><div class="chips" id="depts">${s.departments.map((d) => `<span class="chip dept-chip" data-dept="${esc(d)}">${esc(d)} <button type="button" class="icon-btn xs ghost" style="width:20px;height:20px" aria-label="Remove">${icon('x')}</button></span>`).join('')}</div>
           <div class="row mt" style="max-width:420px"><input id="new-dept" placeholder="Add a department, e.g. SEO"><button class="btn sm light" type="button" id="add-dept">${icon('plus')}Add</button></div></div>
         <div class="form-grid mt">
-          <div class="full notice sky" style="justify-content:space-between;flex-wrap:wrap"><span class="row">${icon('lock')}<span><strong>Lock accounts to one device.</strong> Each employee can only sign in from the first phone/computer they used, and one device can't be used for two employees.</span></span>
+          <div class="full notice sky" style="justify-content:space-between;flex-wrap:wrap"><span class="row">${icon('lock')}<span><strong>Lock employees to their devices.</strong> Each employee can use one phone and one laptop (the first ones they sign in from), and a device can't be shared between employees. Owners can sign in from anywhere.</span></span>
             <label class="toggle"><input type="checkbox" name="device_lock" ${s.device_lock ? 'checked' : ''}>On</label></div>
           <label class="f">Kudos each person can send per day<input type="number" name="kudos_daily_limit" value="${s.kudos_daily_limit}" min="0" max="50" required></label>
           <label class="f">Green points per kudos received <span class="muted tiny">(0 = recognition only)</span><input type="number" name="kudos_green" value="${s.kudos_green}" min="0" max="10" required></label>

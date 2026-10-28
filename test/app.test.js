@@ -25,13 +25,17 @@ let db;
 let clock = cairo('2026-01-04', '09:00'); // Sunday
 
 // A tiny browser: keeps a cookie jar (session + device cookies). `jar` is exposed for device tests.
-function client() {
+const UA = {
+  phone: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  laptop: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+};
+function client(ua = UA.phone) {
   const jar = new Map();
   const call = async (path, { method = 'GET', body } = {}) => {
     const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
     const res = await fetch(`${base}/api${path}`, {
       method,
-      headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}) },
+      headers: { 'User-Agent': ua, ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     for (const c of res.headers.getSetCookie()) {
@@ -240,37 +244,47 @@ test('remote-enabled staff can check in away from the office', async () => {
   assert.ok(add.body.id);
 });
 
-test('device lock: accounts stick to their first device', async () => {
+test('device lock: one phone + one laptop per employee, owner unrestricted', async () => {
   await owner('/admin/users', { method: 'POST', body: { name: 'Dev One', username: 'devone', password: 'pass123' } });
   await owner('/admin/users', { method: 'POST', body: { name: 'Dev Two', username: 'devtwo', password: 'pass123' } });
-  const phoneA = client();
-  const phoneB = client();
-  // First login binds devone to phone A.
-  assert.equal((await phoneA('/login', { method: 'POST', body: { username: 'devone', password: 'pass123' } })).status, 200);
-  // devone from phone B is refused.
-  const other = await phoneB('/login', { method: 'POST', body: { username: 'devone', password: 'pass123' } });
+  const login = (c, username) => c('/login', { method: 'POST', body: { username, password: 'pass123' } });
+  const phoneA = client(UA.phone);
+  const laptopA = client(UA.laptop);
+  const phoneB = client(UA.phone);
+  const laptopB = client(UA.laptop);
+  // First phone and first laptop are both registered.
+  assert.equal((await login(phoneA, 'devone')).status, 200);
+  assert.equal((await login(laptopA, 'devone')).status, 200);
+  // A second phone or a second laptop is refused.
+  const other = await login(phoneB, 'devone');
   assert.equal(other.status, 403);
   assert.equal(other.body.code, 'device_locked');
-  // Phone A can't be used to log into a colleague's (unbound) account either.
-  assert.equal((await phoneA('/login', { method: 'POST', body: { username: 'devtwo', password: 'pass123' } })).status, 403);
+  assert.match(other.body.error, /phone registered/);
+  assert.equal((await login(laptopB, 'devone')).status, 403);
+  // Phone A can't be used for a colleague's account either.
+  assert.equal((await login(phoneA, 'devtwo')).status, 403);
   // A copied session cookie without the device cookie is useless.
   const thief = client();
   thief.jar.set('bahr_sid', phoneA.jar.get('bahr_sid'));
   assert.equal((await thief('/me')).status, 401);
   assert.equal((await phoneA('/me')).status, 200);
-  // Owner sees the binding + blocked attempts, then resets the device.
-  const users = (await owner('/admin/users')).body;
-  const one = users.find((u) => u.username === 'devone');
-  assert.equal(one.device_bound, true);
-  assert.ok(Number(one.device_blocks) >= 1);
+  // Owner sees both devices + blocked attempts, then resets only the phone.
+  const one = (await owner('/admin/users')).body.find((u) => u.username === 'devone');
+  assert.deepEqual(one.devices.map((d) => d.kind).sort(), ['desktop', 'mobile']);
+  assert.ok(Number(one.device_blocks) >= 2);
   assert.ok((await owner('/admin/feed')).body.some((f) => f.type === 'device'));
-  await owner(`/admin/users/${one.id}`, { method: 'PATCH', body: { reset_device: true } });
-  assert.equal((await phoneA('/me')).status, 401); // old sessions are signed out
-  assert.equal((await phoneB('/login', { method: 'POST', body: { username: 'devone', password: 'pass123' } })).status, 200);
-  // With the lock turned off, any device works.
+  await owner(`/admin/users/${one.id}`, { method: 'PATCH', body: { reset_device: 'mobile' } });
+  assert.equal((await phoneA('/me')).status, 401); // phone signed out
+  assert.equal((await laptopA('/me')).status, 200); // laptop untouched
+  assert.equal((await login(phoneB, 'devone')).status, 200); // new phone registers
+  // The owner can sign in from any number of devices.
+  for (const ua of [UA.phone, UA.phone, UA.laptop, UA.laptop]) {
+    assert.equal((await client(ua)('/login', { method: 'POST', body: { username: 'boss', password: 'secret1' } })).status, 200);
+  }
+  // With the lock turned off, any device works for employees too.
   const s = (await owner('/admin/settings')).body;
   await owner('/admin/settings', { method: 'PUT', body: { ...s, device_lock: false } });
-  assert.equal((await client()('/login', { method: 'POST', body: { username: 'devone', password: 'pass123' } })).status, 200);
+  assert.equal((await login(client(), 'devone')).status, 200);
   await owner('/admin/settings', { method: 'PUT', body: { ...s, device_lock: true } });
 });
 

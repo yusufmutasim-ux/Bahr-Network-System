@@ -85,6 +85,24 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS device_label TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS device_bound_at TIMESTAMPTZ;
 CREATE UNIQUE INDEX IF NOT EXISTS users_device ON users (device_hash) WHERE device_hash IS NOT NULL;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS device_hash TEXT;
+-- Each employee may register one mobile and one desktop/laptop device.
+CREATE TABLE IF NOT EXISTS user_devices (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('mobile', 'desktop')),
+  device_hash TEXT NOT NULL UNIQUE,
+  label TEXT,
+  bound_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ,
+  UNIQUE (user_id, kind)
+);
+-- Move single-device bindings from the first version into user_devices (idempotent).
+INSERT INTO user_devices (user_id, kind, device_hash, label, bound_at)
+  SELECT id, CASE WHEN device_label ~ '^(iPhone|iPad|Android)' THEN 'mobile' ELSE 'desktop' END,
+         device_hash, device_label, COALESCE(device_bound_at, now())
+  FROM users WHERE device_hash IS NOT NULL
+  ON CONFLICT DO NOTHING;
+UPDATE users SET device_hash = NULL, device_label = NULL, device_bound_at = NULL WHERE device_hash IS NOT NULL;
 CREATE TABLE IF NOT EXISTS device_blocks (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

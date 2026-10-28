@@ -71,6 +71,13 @@ const deviceHash = (req) => {
   return id ? sha256(id) : null;
 };
 
+// "mobile" for phones/tablets, otherwise "desktop" (laptops and PCs).
+function deviceKind(req) {
+  const ua = req.headers['user-agent'] || '';
+  if (req.headers['sec-ch-ua-mobile'] === '?1') return 'mobile';
+  return /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(ua) ? 'mobile' : 'desktop';
+}
+
 // Short human label like "iPhone · Safari" for the owner's staff screen.
 function deviceLabel(ua = '') {
   const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android'
@@ -120,6 +127,7 @@ function clearLoginFailures(key) {
 module.exports = {
   ensureDevice,
   deviceHash,
+  deviceKind,
   deviceLabel,
   hashPassword,
   verifyPassword,

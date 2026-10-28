@@ -132,32 +132,39 @@ function createApp(db, { now = () => new Date() } = {}) {
     const device = auth.ensureDevice(req, res);
     const label = auth.deviceLabel(req.headers['user-agent']);
     const s = await settings();
-    if (user.role === 'employee' && s.device_lock) await checkDevice(user, device, label);
+    // Owners/managers can sign in from anywhere; only employees are device-locked.
+    if (user.role === 'employee' && s.device_lock) await checkDevice(user, device, label, auth.deviceKind(req));
     const session = await auth.createSession(db, user.id, device);
     auth.setSessionCookie(res, session.token, session.expires);
     res.json({ ok: true });
   });
 
-  // First login binds the account to this device; afterwards only that device may log in,
-  // and a device can belong to only one employee (stops logging in on a colleague's behalf).
-  async function checkDevice(user, device, label) {
+  // Each employee gets one mobile slot and one desktop slot. The first phone and the first
+  // laptop/PC they sign in from are registered; any other device is refused, and a device can
+  // belong to only one employee (stops signing in on a colleague's behalf).
+  async function checkDevice(user, device, label, kind) {
     const block = async (reason, message) => {
       await db.run('INSERT INTO device_blocks (user_id, reason, device_label) VALUES (?, ?, ?)', [user.id, reason, label]);
       fail(message, 403, 'device_locked');
     };
-    if (user.device_hash) {
-      if (user.device_hash !== device) {
-        await block('other_device', 'This account is locked to another device. Ask your manager to reset your device if you changed phones.');
+    const known = await db.get('SELECT id, user_id FROM user_devices WHERE device_hash = ?', [device]);
+    if (known) {
+      if (known.user_id !== user.id) {
+        await block('device_taken', 'This device is already registered to another employee. Sign in from your own phone or laptop.');
       }
+      await db.run('UPDATE user_devices SET last_seen_at = now(), label = ? WHERE id = ?', [label, known.id]);
       return;
     }
-    const owner = await db.get('SELECT id FROM users WHERE device_hash = ? AND id != ?', [device, user.id]);
-    if (owner) await block('device_taken', 'This device is already registered to another employee. Log in from your own phone.');
-    const bound = await db.run(
-      `UPDATE users SET device_hash = ?, device_label = ?, device_bound_at = now() WHERE id = ? AND device_hash IS NULL`,
-      [device, label, user.id],
+    const what = kind === 'mobile' ? 'phone' : 'laptop / computer';
+    const slot = await db.get('SELECT label FROM user_devices WHERE user_id = ? AND kind = ?', [user.id, kind]);
+    if (slot) {
+      await block('other_device', `Your account already has a ${what} registered (${slot.label || 'another device'}). Ask your manager to reset it if you changed devices.`);
+    }
+    const added = await db.run(
+      `INSERT INTO user_devices (user_id, kind, device_hash, label, last_seen_at) VALUES (?, ?, ?, ?, now()) ON CONFLICT DO NOTHING`,
+      [user.id, kind, device, label],
     );
-    if (!bound.changes) await block('other_device', 'This account is locked to another device.');
+    if (!added.changes) await block('other_device', `Your account already has a ${what} registered.`);
   }
 
   app.post('/api/logout', async (req, res) => {
@@ -505,7 +512,8 @@ function createApp(db, { now = () => new Date() } = {}) {
     const [users, bal] = await Promise.all([
       db.all(
         `SELECT id, name, username, role, phone, job_title, department, birthday, remote_allowed, active, start_date, created_at,
-                device_hash IS NOT NULL AS device_bound, device_label, device_bound_at,
+                (SELECT COALESCE(json_agg(json_build_object('kind', d.kind, 'label', d.label, 'bound_at', d.bound_at, 'last_seen_at', d.last_seen_at)
+                                 ORDER BY d.kind DESC), '[]'::json) FROM user_devices d WHERE d.user_id = users.id) AS devices,
                 (SELECT COUNT(*) FROM device_blocks b WHERE b.user_id = users.id AND b.created_at > now() - interval '30 days') AS device_blocks
          FROM users ORDER BY role DESC, active DESC, name`,
       ),
@@ -553,10 +561,16 @@ function createApp(db, { now = () => new Date() } = {}) {
     if (b.department !== undefined) fields.department = str(b.department, 40) || null;
     if (b.birthday !== undefined) fields.birthday = b.birthday === '' || b.birthday === null ? null : isDate(b.birthday) ? b.birthday : fail('Invalid birthday');
     if (b.remote_allowed !== undefined) fields.remote_allowed = b.remote_allowed ? 1 : 0;
+    // reset_device: 'mobile' | 'desktop' | true (both). Signs out sessions on the removed devices.
     if (b.reset_device) {
-      fields.device_hash = null;
-      fields.device_label = null;
-      fields.device_bound_at = null;
+      const kinds = b.reset_device === 'mobile' || b.reset_device === 'desktop' ? [b.reset_device] : ['mobile', 'desktop'];
+      const removed = await db.all(
+        'DELETE FROM user_devices WHERE user_id = ? AND kind = ANY(?::text[]) RETURNING device_hash',
+        [user.id, kinds],
+      );
+      if (removed.length) {
+        await db.run('DELETE FROM sessions WHERE user_id = ? AND device_hash = ANY(?::text[])', [user.id, removed.map((r) => r.device_hash)]);
+      }
     }
     if (b.start_date !== undefined) fields.start_date = isDate(b.start_date) ? b.start_date : fail('Invalid date');
     if (b.active !== undefined) {
@@ -574,7 +588,7 @@ function createApp(db, { now = () => new Date() } = {}) {
         user.id,
       ]);
     }
-    if ((fields.password_hash || fields.active === 0 || b.reset_device) && user.id !== req.user.id) {
+    if ((fields.password_hash || fields.active === 0) && user.id !== req.user.id) {
       await db.run('DELETE FROM sessions WHERE user_id = ?', [user.id]);
     }
     res.json({ ok: true });
