@@ -2,6 +2,9 @@ const crypto = require('node:crypto');
 
 const SESSION_DAYS = 30;
 const COOKIE = 'bahr_sid';
+// Long-lived random device id. Only its SHA-256 hash is stored server-side.
+const DEVICE_COOKIE = 'bahr_dev';
+const DEVICE_YEARS = 10;
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16);
@@ -26,36 +29,71 @@ function parseCookies(header = '') {
   return out;
 }
 
-async function createSession(db, userId) {
+const secureFlag = () => (process.env.COOKIE_SECURE === '1' || process.env.VERCEL ? '; Secure' : '');
+const sha256 = (v) => crypto.createHash('sha256').update(v).digest('hex');
+
+async function createSession(db, userId, deviceHash = null) {
   const token = crypto.randomBytes(32).toString('hex');
   const expires = Date.now() + SESSION_DAYS * 864e5;
   await db.run('DELETE FROM sessions WHERE expires_at < ?', [Date.now()]);
-  await db.run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)', [token, userId, expires]);
+  await db.run('INSERT INTO sessions (token, user_id, expires_at, device_hash) VALUES (?, ?, ?, ?)', [
+    token, userId, expires, deviceHash,
+  ]);
   return { token, expires };
 }
 
 function setSessionCookie(res, token, expires) {
-  const secure = process.env.COOKIE_SECURE === '1' || process.env.VERCEL ? '; Secure' : '';
-  res.setHeader(
+  res.append(
     'Set-Cookie',
-    `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Expires=${new Date(expires).toUTCString()}${secure}`,
+    `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Expires=${new Date(expires).toUTCString()}${secureFlag()}`,
   );
 }
 
 function clearSessionCookie(res) {
-  res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+  res.append('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+}
+
+// Returns this browser's device hash, issuing a new device cookie if it has none.
+function ensureDevice(req, res) {
+  let id = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
+  if (!id || !/^[a-f0-9]{64}$/.test(id)) {
+    id = crypto.randomBytes(32).toString('hex');
+    res.append(
+      'Set-Cookie',
+      `${DEVICE_COOKIE}=${id}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${DEVICE_YEARS * 365 * 86400}${secureFlag()}`,
+    );
+  }
+  return sha256(id);
+}
+
+const deviceHash = (req) => {
+  const id = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
+  return id ? sha256(id) : null;
+};
+
+// Short human label like "iPhone · Safari" for the owner's staff screen.
+function deviceLabel(ua = '') {
+  const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android'
+    : /Windows/.test(ua) ? 'Windows' : /Mac OS X|Macintosh/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : 'Device';
+  const br = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /SamsungBrowser/.test(ua) ? 'Samsung Internet'
+    : /CriOS|Chrome\//.test(ua) ? 'Chrome' : /FxiOS|Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  return `${os} · ${br}`;
 }
 
 async function sessionUser(db, req) {
   const token = parseCookies(req.headers.cookie)[COOKIE];
   if (!token) return null;
   const row = await db.get(
-    `SELECT u.id, u.name, u.username, u.role, u.phone, u.job_title, u.active, u.start_date, u.created_at, u.department, u.birthday, u.remote_allowed, s.token
+    `SELECT u.id, u.name, u.username, u.role, u.phone, u.job_title, u.active, u.start_date, u.created_at, u.department, u.birthday, u.remote_allowed, s.token,
+            s.device_hash AS session_device
      FROM sessions s JOIN users u ON u.id = s.user_id
      WHERE s.token = ? AND s.expires_at > ?`,
     [token, Date.now()],
   );
-  return row && row.active ? row : null;
+  if (!row || !row.active) return null;
+  // A session bound to a device only works together with that device's cookie (a copied session cookie is useless).
+  if (row.session_device && row.session_device !== deviceHash(req)) return null;
+  return row;
 }
 
 // Simple in-memory brute-force guard for the login endpoint (per server instance).
@@ -80,6 +118,9 @@ function clearLoginFailures(key) {
 }
 
 module.exports = {
+  ensureDevice,
+  deviceHash,
+  deviceLabel,
   hashPassword,
   verifyPassword,
   createSession,

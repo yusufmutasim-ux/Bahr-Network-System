@@ -24,19 +24,28 @@ let base;
 let db;
 let clock = cairo('2026-01-04', '09:00'); // Sunday
 
+// A tiny browser: keeps a cookie jar (session + device cookies). `jar` is exposed for device tests.
 function client() {
-  let cookie = '';
-  return async (path, { method = 'GET', body } = {}) => {
+  const jar = new Map();
+  const call = async (path, { method = 'GET', body } = {}) => {
+    const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
     const res = await fetch(`${base}/api${path}`, {
       method,
       headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
-    const set = res.headers.get('set-cookie');
-    if (set) cookie = set.split(';')[0];
+    for (const c of res.headers.getSetCookie()) {
+      const [pair] = c.split(';');
+      const i = pair.indexOf('=');
+      const [k, v] = [pair.slice(0, i), pair.slice(i + 1)];
+      if (/Max-Age=0/.test(c)) jar.delete(k);
+      else jar.set(k, v);
+    }
     const text = await res.text();
     return { status: res.status, body: text.startsWith('{') || text.startsWith('[') ? JSON.parse(text) : text };
   };
+  call.jar = jar;
+  return call;
 }
 
 const owner = client();
@@ -229,6 +238,40 @@ test('remote-enabled staff can check in away from the office', async () => {
   assert.equal(r.body.attendance.mode, 'remote');
   assert.ok(r.body.attendance.distance_m > 1000);
   assert.ok(add.body.id);
+});
+
+test('device lock: accounts stick to their first device', async () => {
+  await owner('/admin/users', { method: 'POST', body: { name: 'Dev One', username: 'devone', password: 'pass123' } });
+  await owner('/admin/users', { method: 'POST', body: { name: 'Dev Two', username: 'devtwo', password: 'pass123' } });
+  const phoneA = client();
+  const phoneB = client();
+  // First login binds devone to phone A.
+  assert.equal((await phoneA('/login', { method: 'POST', body: { username: 'devone', password: 'pass123' } })).status, 200);
+  // devone from phone B is refused.
+  const other = await phoneB('/login', { method: 'POST', body: { username: 'devone', password: 'pass123' } });
+  assert.equal(other.status, 403);
+  assert.equal(other.body.code, 'device_locked');
+  // Phone A can't be used to log into a colleague's (unbound) account either.
+  assert.equal((await phoneA('/login', { method: 'POST', body: { username: 'devtwo', password: 'pass123' } })).status, 403);
+  // A copied session cookie without the device cookie is useless.
+  const thief = client();
+  thief.jar.set('bahr_sid', phoneA.jar.get('bahr_sid'));
+  assert.equal((await thief('/me')).status, 401);
+  assert.equal((await phoneA('/me')).status, 200);
+  // Owner sees the binding + blocked attempts, then resets the device.
+  const users = (await owner('/admin/users')).body;
+  const one = users.find((u) => u.username === 'devone');
+  assert.equal(one.device_bound, true);
+  assert.ok(Number(one.device_blocks) >= 1);
+  assert.ok((await owner('/admin/feed')).body.some((f) => f.type === 'device'));
+  await owner(`/admin/users/${one.id}`, { method: 'PATCH', body: { reset_device: true } });
+  assert.equal((await phoneA('/me')).status, 401); // old sessions are signed out
+  assert.equal((await phoneB('/login', { method: 'POST', body: { username: 'devone', password: 'pass123' } })).status, 200);
+  // With the lock turned off, any device works.
+  const s = (await owner('/admin/settings')).body;
+  await owner('/admin/settings', { method: 'PUT', body: { ...s, device_lock: false } });
+  assert.equal((await client()('/login', { method: 'POST', body: { username: 'devone', password: 'pass123' } })).status, 200);
+  await owner('/admin/settings', { method: 'PUT', body: { ...s, device_lock: true } });
 });
 
 test('rejects non-JSON writes', async () => {

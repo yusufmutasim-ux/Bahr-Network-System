@@ -79,6 +79,20 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS remote_allowed INTEGER NOT NULL DEFAU
 ALTER TABLE attendance ADD COLUMN IF NOT EXISTS mood INTEGER;
 ALTER TABLE attendance ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'office';
 
+-- Device lock: each employee account is bound to one browser/device (hash of a long-lived cookie).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS device_hash TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS device_label TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS device_bound_at TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS users_device ON users (device_hash) WHERE device_hash IS NOT NULL;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS device_hash TEXT;
+CREATE TABLE IF NOT EXISTS device_blocks (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reason TEXT NOT NULL,
+  device_label TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS kudos (
   id SERIAL PRIMARY KEY,
   from_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -152,6 +166,8 @@ const DEFAULT_SETTINGS = {
   departments: ['Creative', 'Content', 'Social Media', 'Media Buying', 'Design', 'Video Production', 'Account Management', 'Development', 'Operations'],
   kudos_daily_limit: 3,
   kudos_green: 0,
+  // Security: lock each employee to the first device they log in from.
+  device_lock: true,
 };
 
 // SQL is written with `?` placeholders and converted to Postgres' $1, $2, ...

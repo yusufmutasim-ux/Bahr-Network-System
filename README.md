@@ -55,6 +55,12 @@ Absences are recorded automatically. Each work day an active employee missed (no
 - PostgreSQL. In production that's a hosted Postgres such as Neon via `DATABASE_URL`. Locally, with no `DATABASE_URL`, it uses the embedded PGlite automatically, so there's nothing to install.
 - Vanilla JS single-page frontend in `public/`, with no build step
 - Passwords are hashed with scrypt. Sessions use HttpOnly cookies, logins are rate-limited, and JSON-only writes protect against CSRF.
+- **Device lock** (on by default, Settings → Team & culture):
+  - An employee account is bound to the first browser/device it signs in from, through a long-lived HttpOnly device cookie. Only the cookie's SHA-256 hash is stored.
+  - Other devices are refused, and one device can't be bound to two employees. This stops colleagues signing in for each other.
+  - Sessions only work together with their device cookie. Blocked attempts are logged and shown to the owner.
+  - The owner can reset a device from Staff, for example when someone changes phones or clears their browser data.
+  - Owner accounts are not locked.
 
 ## Deploy on Vercel
 

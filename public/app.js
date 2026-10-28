@@ -55,6 +55,8 @@ const ICONS = {
   alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
   more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
   ban: '<circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  phoneLock: '<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/>',
   heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
   megaphone: '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
   flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>',
@@ -215,6 +217,7 @@ async function apiFetch(path, { method, body }) {
   if (!res.ok) {
     const err = new Error(data.error || `Request failed (${res.status})`);
     err.status = res.status;
+    err.code = data.code;
     throw err;
   }
   return data;
@@ -754,10 +757,11 @@ async function start() {
 async function refreshCounts() {
   try {
     if (me.role === 'owner') {
-      const [o, leaves, rewards] = await Promise.all([
+      const [o, leaves, rewards, feed] = await Promise.all([
         api('/admin/overview'),
         api('/admin/leaves?status=pending'),
         api('/admin/rewards?status=pending'),
+        api('/admin/feed').catch(() => []),
       ]);
       pending = o.pending;
       cachedRules = o.rules;
@@ -765,6 +769,7 @@ async function refreshCounts() {
       notifItems = [
         ...leaves.map((l) => ({ at: l.created_at, who: l.user_name, text: `requested leave ${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}`, href: '#/leaves', ico: 'flag', unread: true })),
         ...rewards.map((r) => ({ at: r.created_at, who: r.user_name, text: `requested ${money(r.amount, o.rules.currency)} via ${METHODS[r.method]}`, href: '#/rewards', ico: 'gift', unread: true })),
+        ...feed.filter((f) => f.type === 'device' && Date.now() - new Date(f.at) < 3 * 864e5).map((f) => ({ at: f.at, who: f.name, text: `⚠️ blocked login from ${f.extra || 'another device'}`, href: '#/employees', ico: 'lock', status: 'rejected', unread: true })),
       ].sort((a, b) => new Date(b.at) - new Date(a.at));
     } else {
       renderOnline(null);
@@ -913,13 +918,26 @@ function viewLogin() {
       <label class="f">Username<div class="input-icon">${icon('at')}<input name="username" autocomplete="username" required autofocus></div></label>
       <label class="f">Password<div class="input-icon">${icon('key')}<input name="password" type="password" autocomplete="current-password" required></div></label>
       <button class="btn block xl" type="submit" style="margin-top:6px">${icon('login')}Sign in</button>
+      <div id="login-msg"></div>
+      <p class="muted tiny" style="text-align:center">${icon('lock')} For security, your account works only on the first device you sign in from.</p>
     </form>`);
-  $('#login').onsubmit = (e) => {
+  $('#login').onsubmit = async (e) => {
     e.preventDefault();
-    act(e.submitter, async () => {
+    const btn = e.submitter;
+    btn.disabled = true;
+    try {
       await api('/login', { method: 'POST', body: formData(e.target) });
       await start();
-    });
+    } catch (err) {
+      if (err.code === 'device_locked') {
+        $('#login-msg').innerHTML = `<div class="status-banner pink pop"><span class="ico">${icon('lock')}</span>
+          <div><strong>Device not recognised</strong><div class="small">${esc(err.message)}</div></div></div>`;
+        chime('error');
+        haptic([60, 40, 60]);
+      } else toast(err.message, 'error');
+    } finally {
+      btn.disabled = false;
+    }
   };
 }
 
@@ -1717,6 +1735,11 @@ function feedHtml(raw) {
         title = `Reward ${money(f.amount)} · ${METHODS[f.extra] || ''}`;
         tag = chip(REQ, f.detail);
         side = f.detail === 'pending' ? '<a class="chip amber" href="#/rewards">Review</a>' : '';
+      } else if (f.type === 'device') {
+        ico = 'lock';
+        title = `Blocked login from ${esc(f.extra || 'an unknown device')}`;
+        tag = `<span class="chip pink">⚠️ ${f.detail === 'device_taken' ? 'Device belongs to someone else' : 'Not their device'}</span>`;
+        side = '<a class="chip" href="#/employees">Staff</a>';
       } else if (f.type === 'kudos') {
         ico = 'heart';
         const [em, label, cls] = KUDOS[f.detail] || ['🙌', 'Kudos', 'lime'];
@@ -1813,16 +1836,28 @@ async function viewStaff(params) {
                 ${u.active ? '<span class="chip lime"><span class="dot"></span>Active</span>' : '<span class="chip slate">Inactive</span>'}</div>
               <div class="muted small mt row wrap" style="gap:14px"><span class="row" style="gap:6px">${icon('at')}${esc(u.username)}</span>${u.phone ? `<span class="row" style="gap:6px">${icon('phone')}${esc(u.phone)}</span>` : ''}</div>
               ${u.department || u.remote_allowed ? `<div class="chips mt">${u.department ? `<span class="chip dept-chip">${esc(u.department)}</span>` : ''}${u.remote_allowed ? '<span class="chip sky">🌍 Remote OK</span>' : ''}</div>` : ''}
+              ${u.role === 'employee' ? `<div class="chips mt">${u.device_bound
+                ? `<span class="chip teal" title="Linked ${u.device_bound_at ? relTime(u.device_bound_at) : ''}">${icon('lock')}${esc(u.device_label || 'Device linked')}</span>`
+                : '<span class="chip">📱 No device yet</span>'}${Number(u.device_blocks) ? `<span class="chip pink" title="Blocked login attempts in the last 30 days">⚠️ ${u.device_blocks} blocked</span>` : ''}</div>` : ''}
               ${u.balances ? `<div class="chips mt"><span class="chip lime">${u.balances.green} green</span><span class="chip pink">${u.balances.month.red} red</span><span class="chip dark">${u.balances.month.black} black</span></div>` : ''}
               <div class="row mt" style="gap:6px">
                 ${u.role === 'employee' ? `<a class="btn sm" href="#/staff?id=${u.id}">${icon('activity')}Profile</a>` : ''}
                 <button class="btn sm light" data-edit="${u.id}">${icon('pen')}Edit</button>
+                ${u.role === 'employee' && u.device_bound ? `<button class="icon-btn sm" data-reset-dev="${u.id}" aria-label="Reset device" title="Reset device">${icon('phoneLock')}</button>` : ''}
                 ${u.id !== me.id ? `<button class="icon-btn sm" data-toggle="${u.id}" aria-label="${u.active ? 'Deactivate' : 'Activate'}" title="${u.active ? 'Deactivate' : 'Activate'}">${icon(u.active ? 'ban' : 'check')}</button>` : ''}
               </div></div>`,
           )
           .join('')
       : `<div class="card" style="grid-column:1/-1">${empty('users', 'No staff found')}</div>`;
     $$('[data-edit]').forEach((b) => (b.onclick = () => editEmployee(users.find((x) => x.id === Number(b.dataset.edit)))));
+    $$('[data-reset-dev]').forEach((b) => (b.onclick = () => {
+      const u = users.find((x) => x.id === Number(b.dataset.resetDev));
+      confirmBox(`Reset ${u.name}'s device?`, `They'll be signed out. The next device they log in from (e.g. a new phone) becomes their only allowed device.`, async () => {
+        await api(`/admin/users/${u.id}`, { method: 'PATCH', body: { reset_device: true } });
+        toast('Device reset. They can log in from their new device now', 'success');
+        route();
+      }, { submit: 'Reset device' });
+    }));
     $$('[data-toggle]').forEach((b) => (b.onclick = () => {
       const u = users.find((x) => x.id === Number(b.dataset.toggle));
       const run = async () => {
@@ -2131,6 +2166,8 @@ async function viewSettings() {
         <div class="f"><span>Departments</span><div class="chips" id="depts">${s.departments.map((d) => `<span class="chip dept-chip" data-dept="${esc(d)}">${esc(d)} <button type="button" class="icon-btn xs ghost" style="width:20px;height:20px" aria-label="Remove">${icon('x')}</button></span>`).join('')}</div>
           <div class="row mt" style="max-width:420px"><input id="new-dept" placeholder="Add a department, e.g. SEO"><button class="btn sm light" type="button" id="add-dept">${icon('plus')}Add</button></div></div>
         <div class="form-grid mt">
+          <div class="full notice sky" style="justify-content:space-between;flex-wrap:wrap"><span class="row">${icon('lock')}<span><strong>Lock accounts to one device.</strong> Each employee can only sign in from the first phone/computer they used, and one device can't be used for two employees.</span></span>
+            <label class="toggle"><input type="checkbox" name="device_lock" ${s.device_lock ? 'checked' : ''}>On</label></div>
           <label class="f">Kudos each person can send per day<input type="number" name="kudos_daily_limit" value="${s.kudos_daily_limit}" min="0" max="50" required></label>
           <label class="f">Green points per kudos received <span class="muted tiny">(0 = recognition only)</span><input type="number" name="kudos_green" value="${s.kudos_green}" min="0" max="10" required></label>
         </div></div>
@@ -2187,6 +2224,7 @@ async function viewSettings() {
     };
     for (const k of ['radius_m', 'max_accuracy_m', 'very_late_reds', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'kudos_daily_limit', 'kudos_green']) body[k] = Number(body[k]);
     body.departments = $$('#depts [data-dept]').map((c) => c.dataset.dept);
+    body.device_lock = !!form.device_lock.checked;
     act(e.submitter, async () => {
       const saved = await api('/admin/settings', { method: 'PUT', body });
       company = saved.company_name;

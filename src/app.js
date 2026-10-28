@@ -21,8 +21,8 @@ const { registerCulture } = require('./culture');
 const PAYOUT_METHODS = ['instapay', 'vodafone_cash', 'cash'];
 const ABSENCE_JOB_INTERVAL_MS = 5 * 60 * 1000;
 
-function fail(message, status = 400) {
-  throw new RuleError(message, status);
+function fail(message, status = 400, code = undefined) {
+  throw new RuleError(message, status, code);
 }
 
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -58,6 +58,12 @@ function createApp(db, { now = () => new Date() } = {}) {
   async function requireUser(req, res, next) {
     const user = await auth.sessionUser(db, req);
     if (!user) return res.status(401).json({ error: 'Please log in first' });
+    // Sessions from before the device lock existed: sign in once more so this device gets bound.
+    if (user.role === 'employee' && !user.session_device && (await settings()).device_lock) {
+      await db.run('DELETE FROM sessions WHERE token = ?', [user.token]);
+      return res.status(401).json({ error: 'Please log in again to register this device' });
+    }
+    delete user.session_device;
     req.user = user;
     next();
   }
@@ -103,7 +109,7 @@ function createApp(db, { now = () => new Date() } = {}) {
       );
       return row.id;
     });
-    const session = await auth.createSession(db, userId);
+    const session = await auth.createSession(db, userId, auth.ensureDevice(req, res));
     auth.setSessionCookie(res, session.token, session.expires);
     res.status(201).json({ ok: true });
   });
@@ -113,16 +119,45 @@ function createApp(db, { now = () => new Date() } = {}) {
     const password = typeof req.body.password === 'string' ? req.body.password : '';
     const key = `${req.ip}|${username.toLowerCase()}`;
     if (auth.loginBlocked(key)) fail('Too many failed attempts. Try again in 15 minutes.', 429);
-    const user = await db.get('SELECT id, password_hash, active FROM users WHERE lower(username) = lower(?)', [username]);
+    const user = await db.get(
+      'SELECT id, role, password_hash, active, device_hash FROM users WHERE lower(username) = lower(?)',
+      [username],
+    );
     if (!user || !user.active || !auth.verifyPassword(password, user.password_hash)) {
       auth.recordLoginFailure(key);
       fail('Wrong username or password', 401);
     }
     auth.clearLoginFailures(key);
-    const session = await auth.createSession(db, user.id);
+    const device = auth.ensureDevice(req, res);
+    const label = auth.deviceLabel(req.headers['user-agent']);
+    const s = await settings();
+    if (user.role === 'employee' && s.device_lock) await checkDevice(user, device, label);
+    const session = await auth.createSession(db, user.id, device);
     auth.setSessionCookie(res, session.token, session.expires);
     res.json({ ok: true });
   });
+
+  // First login binds the account to this device; afterwards only that device may log in,
+  // and a device can belong to only one employee (stops logging in on a colleague's behalf).
+  async function checkDevice(user, device, label) {
+    const block = async (reason, message) => {
+      await db.run('INSERT INTO device_blocks (user_id, reason, device_label) VALUES (?, ?, ?)', [user.id, reason, label]);
+      fail(message, 403, 'device_locked');
+    };
+    if (user.device_hash) {
+      if (user.device_hash !== device) {
+        await block('other_device', 'This account is locked to another device. Ask your manager to reset your device if you changed phones.');
+      }
+      return;
+    }
+    const owner = await db.get('SELECT id FROM users WHERE device_hash = ? AND id != ?', [device, user.id]);
+    if (owner) await block('device_taken', 'This device is already registered to another employee. Log in from your own phone.');
+    const bound = await db.run(
+      `UPDATE users SET device_hash = ?, device_label = ?, device_bound_at = now() WHERE id = ? AND device_hash IS NULL`,
+      [device, label, user.id],
+    );
+    if (!bound.changes) await block('other_device', 'This account is locked to another device.');
+  }
 
   app.post('/api/logout', async (req, res) => {
     const user = await auth.sessionUser(db, req);
@@ -420,6 +455,9 @@ function createApp(db, { now = () => new Date() } = {}) {
           FROM points p JOIN users u ON u.id = p.user_id WHERE p.source IN ('manual', 'absent', 'redeem')
           ORDER BY p.created_at DESC LIMIT 15)
          UNION ALL
+         (SELECT 'device', b.user_id, u.name, b.reason, b.created_at, b.device_label, NULL
+          FROM device_blocks b JOIN users u ON u.id = b.user_id ORDER BY b.created_at DESC LIMIT 10)
+         UNION ALL
          (SELECT 'kudos', k.from_user, f.name, k.category, k.created_at, t.name, NULL
           FROM kudos k JOIN users f ON f.id = k.from_user JOIN users t ON t.id = k.to_user ORDER BY k.created_at DESC LIMIT 15)
        ) feed ORDER BY at DESC LIMIT 40`,
@@ -465,7 +503,9 @@ function createApp(db, { now = () => new Date() } = {}) {
     const month = localToday(await settings()).date.slice(0, 7);
     const [users, bal] = await Promise.all([
       db.all(
-        `SELECT id, name, username, role, phone, job_title, department, birthday, remote_allowed, active, start_date, created_at
+        `SELECT id, name, username, role, phone, job_title, department, birthday, remote_allowed, active, start_date, created_at,
+                device_hash IS NOT NULL AS device_bound, device_label, device_bound_at,
+                (SELECT COUNT(*) FROM device_blocks b WHERE b.user_id = users.id AND b.created_at > now() - interval '30 days') AS device_blocks
          FROM users ORDER BY role DESC, active DESC, name`,
       ),
       balancesByUser(db, month),
@@ -512,6 +552,11 @@ function createApp(db, { now = () => new Date() } = {}) {
     if (b.department !== undefined) fields.department = str(b.department, 40) || null;
     if (b.birthday !== undefined) fields.birthday = b.birthday === '' || b.birthday === null ? null : isDate(b.birthday) ? b.birthday : fail('Invalid birthday');
     if (b.remote_allowed !== undefined) fields.remote_allowed = b.remote_allowed ? 1 : 0;
+    if (b.reset_device) {
+      fields.device_hash = null;
+      fields.device_label = null;
+      fields.device_bound_at = null;
+    }
     if (b.start_date !== undefined) fields.start_date = isDate(b.start_date) ? b.start_date : fail('Invalid date');
     if (b.active !== undefined) {
       if (user.id === req.user.id && !b.active) fail('You cannot deactivate your own account');
@@ -528,7 +573,7 @@ function createApp(db, { now = () => new Date() } = {}) {
         user.id,
       ]);
     }
-    if ((fields.password_hash || fields.active === 0) && user.id !== req.user.id) {
+    if ((fields.password_hash || fields.active === 0 || b.reset_device) && user.id !== req.user.id) {
       await db.run('DELETE FROM sessions WHERE user_id = ?', [user.id]);
     }
     res.json({ ok: true });
@@ -749,7 +794,7 @@ function createApp(db, { now = () => new Date() } = {}) {
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
   app.use((err, req, res, next) => {
-    if (err instanceof RuleError) return res.status(err.status).json({ error: err.message });
+    if (err instanceof RuleError) return res.status(err.status).json({ error: err.message, code: err.code });
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON' });
     if (err.code === '23505') return res.status(409).json({ error: 'That record already exists' });
     console.error(err);
@@ -808,6 +853,7 @@ function validateSettings(s) {
   }
   out.work_days = [...new Set(s.work_days)];
   out.currency = str(s.currency, 10) || 'EGP';
+  out.device_lock = s.device_lock !== false;
   num('kudos_daily_limit', 0, 50);
   num('kudos_green', 0, 10);
   if (!Array.isArray(s.departments) || s.departments.length > 40) fail('Invalid departments');
