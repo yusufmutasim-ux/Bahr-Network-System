@@ -17,6 +17,7 @@ const {
 } = require('./logic');
 const auth = require('./auth');
 const { registerCulture } = require('./culture');
+const { resolveMapLink } = require('./maplink');
 
 const PAYOUT_METHODS = ['instapay', 'vodafone_cash', 'cash'];
 const ABSENCE_JOB_INTERVAL_MS = 5 * 60 * 1000;
@@ -730,6 +731,20 @@ function createApp(db, { now = () => new Date() } = {}) {
 
   app.get('/api/admin/settings', requireOwner, async (req, res) => res.json(await settings()));
 
+  // Turns a pasted Google Maps link (incl. maps.app.goo.gl short links) into coordinates.
+  app.post('/api/admin/resolve-map-link', requireOwner, async (req, res) => {
+    const link = str(req.body.url, 2000);
+    if (!link) fail('Paste a Google Maps link');
+    let coords = null;
+    try {
+      coords = await resolveMapLink(link);
+    } catch {
+      coords = null;
+    }
+    if (!coords) fail("Couldn't read a location from that link. Open the place in Google Maps, tap Share → Copy link, and paste it here.");
+    res.json(coords);
+  });
+
   app.put('/api/admin/settings', requireOwner, async (req, res) => {
     const next = validateSettings({ ...(await settings()), ...req.body });
     await saveSettings(db, next);
@@ -810,7 +825,7 @@ function pickRules(s) {
     'very_late_reds', 'work_days', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'radius_m',
     'departments', 'kudos_daily_limit', 'kudos_green',
   ];
-  return Object.fromEntries(keys.map((k) => [k, s[k]]));
+  return { ...Object.fromEntries(keys.map((k) => [k, s[k]])), location_set: s.office_lat != null };
 }
 
 function validateSettings(s) {

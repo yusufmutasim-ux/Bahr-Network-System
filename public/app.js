@@ -245,7 +245,8 @@ async function act(btn, fn, okMsg) {
     return true;
   } catch (err) {
     if (err.status === 401 && me) return start();
-    toast(err.message, 'error');
+    if (err.help) showLocationHelp(err);
+    else toast(err.message, 'error');
     return false;
   } finally {
     if (btn) btn.disabled = false;
@@ -276,15 +277,84 @@ function modal({ title, sub = '', body, submit = 'Save', danger = false, onSubmi
 const confirmBox = (title, text, onYes, { submit = 'Confirm', danger = true } = {}) =>
   modal({ title, sub: esc(text), body: '', submit, danger, onSubmit: onYes });
 
-function getPosition() {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error('This device does not support location.'));
-    navigator.geolocation.getCurrentPosition(
-      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
-      (e) => reject(new Error(e.code === 1 ? 'Location permission denied. Allow location access in your browser settings.' : 'Could not get your location. Try again.')),
-      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
-    );
+// ---------- Location ----------
+
+const UA = navigator.userAgent;
+const IS_IOS = /iPhone|iPad|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_ANDROID = /Android/.test(UA);
+const IN_APP = /FBAN|FBAV|Instagram|Line\/|WhatsApp|Snapchat|TikTok|; wv\)/.test(UA);
+
+function locationError(kind) {
+  const steps = {
+    insecure: ['Location only works on a secure (https://) link.', 'Open the system using its https:// address.'],
+    unsupported: ["This browser can't share location.", 'Open the link in Chrome or Safari.'],
+    inapp: ["You're inside another app's browser (WhatsApp, Instagram…), which blocks location.", 'Tap ⋮ / Share → "Open in Chrome" or "Open in Safari", then try again.'],
+    denied: IS_IOS
+      ? ['Location is blocked for this site.', 'Open iPhone Settings → Privacy & Security → Location Services → turn it ON.', 'Then Settings → Safari (or Chrome) → Location → "While Using" / "Ask".', 'Back in the browser tap "aA" → Website Settings → Location → Allow, then reload.']
+      : IS_ANDROID
+        ? ['Location is blocked for this site.', 'Turn on Location from the quick-settings panel (swipe down).', 'In Chrome tap the 🔒 icon next to the address → Permissions → Location → Allow.', 'Reload the page and try again.']
+        : ['Location is blocked for this site.', 'Click the 🔒 / ⚙️ icon at the left of the address bar → Location → Allow.', 'Reload the page and try again.', 'On a computer you can also set the office from the map instead.'],
+    unavailable: IS_IOS || IS_ANDROID
+      ? ["Your phone couldn't find its location.", 'Make sure Location / GPS is turned on.', 'Move near a window or outside, then try again.']
+      : ["This computer couldn't find its location (many PCs have no GPS).", 'Turn on Wi-Fi, or set the office by clicking it on the map / pasting a Google Maps link.'],
+    timeout: ['Finding your location took too long.', 'Move near a window or outside and try again.', 'Make sure Location / GPS is on.'],
+  }[kind];
+  const err = new Error(steps[0]);
+  err.help = steps.slice(1);
+  err.kind = kind;
+  return err;
+}
+
+function showLocationHelp(err) {
+  if (!err.help) return toast(err.message, 'error');
+  chime('error');
+  modal({
+    title: 'Location needed 📍',
+    sub: esc(err.message),
+    body: `<ol class="grid" style="gap:10px;padding-left:20px;margin:0">${err.help.map((h) => `<li>${esc(h)}</li>`).join('')}</ol>`,
+    submit: 'Got it',
+    onSubmit: async () => {},
   });
+}
+
+// High-accuracy GPS first, then a quicker low-accuracy fix (Wi-Fi / cell) as a fallback.
+function getPosition() {
+  if (!window.isSecureContext) return Promise.reject(locationError('insecure'));
+  if (!navigator.geolocation) return Promise.reject(locationError(IN_APP ? 'inapp' : 'unsupported'));
+  const once = (opts) =>
+    new Promise((resolve, reject) =>
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
+        reject,
+        opts,
+      ),
+    );
+  return once({ enableHighAccuracy: true, timeout: 15000, maximumAge: 0 })
+    .catch((e) => {
+      if (e.code === 1) throw e;
+      return once({ enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 });
+    })
+    .catch((e) => {
+      if (e.kind) throw e;
+      throw locationError(e.code === 1 ? (IN_APP ? 'inapp' : 'denied') : e.code === 3 ? 'timeout' : 'unavailable');
+    });
+}
+
+// Leaflet (OpenStreetMap) is loaded only when a map is shown.
+let leafletReady;
+function loadLeaflet() {
+  leafletReady ||= new Promise((resolve, reject) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.append(css);
+    const js = document.createElement('script');
+    js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    js.onload = () => resolve(window.L);
+    js.onerror = () => { leafletReady = null; reject(new Error('Map failed to load. Check your connection.')); };
+    document.head.append(js);
+  });
+  return leafletReady;
 }
 
 const empty = (ico, text, extra = '') => `<div class="empty"><div class="ico">${icon(ico)}</div><div>${text}</div>${extra}</div>`;
@@ -1569,6 +1639,9 @@ async function viewOwnerDashboard(params) {
       <input type="date" id="date" value="${o.date}" style="width:170px">
       <button class="btn light" id="add-emp">${icon('plus')}Add employee</button>
       <a class="btn" href="/api/admin/report.csv?month=${o.date.slice(0, 7)}">${icon('download')}Export</a>`)}
+    ${r.location_set ? '' : `<a class="announce amber" href="#/settings" style="text-decoration:none;margin-bottom:16px"><span class="em float">📍</span>
+      <div style="flex:1"><h3>Set your office location</h3><p>Staff can't check in until the office is on the map. It takes 30 seconds: search, paste a Google Maps link or tap the map.</p></div>
+      <span class="btn sm">Set location</span></a>`}
     <div class="dash">
       <div class="stack-col">
         <div class="card">
@@ -2142,14 +2215,39 @@ async function viewSettings() {
             <label class="f">Currency<input name="currency" value="${esc(s.currency)}" required></label>
             <label class="f">Timezone<input name="timezone" value="${esc(s.timezone)}" required></label>
           </div></div>
-        <div class="card" style="margin:0"><div class="card-head"><h2>Office location</h2>${mapLink ? `<a class="btn sm light" href="${mapLink}" target="_blank" rel="noopener">${icon('pin')}View map</a>` : ''}</div>
+        <div class="card" style="margin:0"><div class="card-head"><h2>Check-in rules</h2></div>
           <div class="form-grid">
-            <label class="f">Latitude<input name="office_lat" value="${s.office_lat ?? ''}" inputmode="decimal"></label>
-            <label class="f">Longitude<input name="office_lng" value="${s.office_lng ?? ''}" inputmode="decimal"></label>
-            <label class="f">Allowed radius (m)<input type="number" name="radius_m" value="${s.radius_m}" min="10" required></label>
             <label class="f">Max GPS uncertainty (m)<input type="number" name="max_accuracy_m" value="${s.max_accuracy_m}" min="5" required></label>
-            <div class="full"><button class="btn light" type="button" id="use-loc">${icon('pin')}Use my current location</button></div>
-          </div></div>
+          </div>
+          <p class="muted small mt">Check-ins with a GPS reading less precise than this are rejected. 100–200 m works for most phones; raise it if staff indoors get errors.</p>
+        </div>
+      </div>
+      <div class="card" style="margin:0" id="loc-card">
+        <div class="card-head"><h2>Office location 📍</h2>
+          <div class="actions"><span class="chip ${s.office_lat == null ? 'amber' : 'lime'}" id="loc-status">${s.office_lat == null ? 'Not set yet' : 'Set'}</span>
+          ${mapLink ? `<a class="btn sm light" href="${mapLink}" target="_blank" rel="noopener">Google Maps</a>` : ''}</div></div>
+        <div class="loc-grid">
+          <div class="map-wrap"><div id="map"><div class="empty" style="height:100%;justify-content:center">${icon('pin')}Loading map…</div></div>
+            <p class="muted tiny" style="margin-top:6px">Tap the map or drag the pin to the office entrance. The circle is the allowed check-in area.</p></div>
+          <div class="grid" style="gap:14px;align-content:start">
+            <div class="f"><span>1 · Search an address</span>
+              <div class="input-icon">${icon('search')}<input id="loc-search" placeholder="e.g. Bahr Network, Hurghada"></div>
+              <div id="loc-results" class="list"></div></div>
+            <div class="f"><span>2 · Or paste a Google Maps link</span>
+              <div class="row"><input id="loc-link" placeholder="https://maps.app.goo.gl/…"><button class="btn sm light" type="button" id="loc-link-go">Use</button></div></div>
+            <div class="f"><span>3 · Or use this device's GPS (stand in the office)</span>
+              <button class="btn light" type="button" id="use-loc">${icon('pin')}Use my current location</button></div>
+            <div class="form-grid">
+              <label class="f">Latitude<input name="office_lat" value="${s.office_lat ?? ''}" inputmode="decimal"></label>
+              <label class="f">Longitude<input name="office_lng" value="${s.office_lng ?? ''}" inputmode="decimal"></label>
+            </div>
+            <label class="f">Allowed radius: <strong id="radius-label">${s.radius_m} m</strong>
+              <input type="range" id="radius-range" min="20" max="1000" step="10" value="${Math.min(1000, s.radius_m)}" style="height:auto;padding:0;accent-color:var(--green)">
+              <input type="number" name="radius_m" value="${s.radius_m}" min="10" required></label>
+            <button class="btn xl block" type="button" id="save-loc">${icon('check')}Save office location</button>
+            <button class="btn light block" type="button" id="test-loc">${icon('activity')}Test: how far am I from the office?</button>
+          </div>
+        </div>
       </div>
       <div class="card" style="margin:0"><div class="card-head"><h2>Check-in times</h2><span class="muted small">Preview updates as you type</span></div>
         <div id="track-preview"></div>
@@ -2205,15 +2303,121 @@ async function viewSettings() {
   $('#add-dept').onclick = addDept;
   $('#new-dept').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addDept(); } };
   form.onchange = form.oninput;
-  $('#use-loc').onclick = (e) => act(e.currentTarget, async () => {
-    const p = await getPosition();
-    form.office_lat.value = p.lat.toFixed(6);
-    form.office_lng.value = p.lng.toFixed(6);
-    $('#dirty').textContent = 'Unsaved changes';
-    toast(`Location captured (±${Math.round(p.accuracy)} m). Don't forget to save.`, 'success');
+  // ----- Location picker -----
+  let map;
+  let pin;
+  let ring;
+  const markDirty = () => ($('#dirty').textContent = 'Unsaved changes');
+  const setLoc = (lat, lng, { zoom = false, from = '' } = {}) => {
+    form.office_lat.value = Number(lat).toFixed(6);
+    form.office_lng.value = Number(lng).toFixed(6);
+    if (map) {
+      pin.setLatLng([lat, lng]);
+      ring.setLatLng([lat, lng]);
+      if (zoom) map.setView([lat, lng], 17);
+      else map.panTo([lat, lng]);
+    }
+    $('#loc-status').className = 'chip amber';
+    $('#loc-status').textContent = 'Not saved yet';
+    markDirty();
+    if (from) toast(`Location set from ${from}. Tap "Save office location".`, 'success');
+  };
+  const setRadius = (r) => {
+    form.radius_m.value = r;
+    $('#radius-range').value = Math.min(1000, r);
+    $('#radius-label').textContent = `${r} m`;
+    ring?.setRadius(Number(r));
+  };
+  loadLeaflet()
+    .then((L) => {
+      const start = s.office_lat != null ? [s.office_lat, s.office_lng] : [30.0444, 31.2357];
+      $('#map').innerHTML = '';
+      map = L.map('map', { zoomControl: true }).setView(start, s.office_lat != null ? 17 : 6);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+      pin = L.marker(start, { draggable: true }).addTo(map);
+      ring = L.circle(start, { radius: s.radius_m, color: '#22a35a', fillColor: '#dcf29b', fillOpacity: 0.35, weight: 2 }).addTo(map);
+      if (s.office_lat == null) pin.setOpacity(0.4);
+      pin.on('drag', (e) => ring.setLatLng(e.latlng));
+      pin.on('dragend', (e) => { pin.setOpacity(1); setLoc(e.target.getLatLng().lat, e.target.getLatLng().lng); });
+      map.on('click', (e) => { pin.setOpacity(1); setLoc(e.latlng.lat, e.latlng.lng); });
+      setTimeout(() => map.invalidateSize(), 200);
+    })
+    .catch((err) => ($('#map').innerHTML = `<div class="empty" style="height:100%;justify-content:center">${esc(err.message)}</div>`));
+
+  $('#radius-range').oninput = (e) => { setRadius(e.target.value); markDirty(); };
+  form.radius_m.addEventListener('input', (e) => setRadius(e.target.value));
+  ['office_lat', 'office_lng'].forEach((k) => form[k].addEventListener('change', () => {
+    const lat = Number(form.office_lat.value);
+    const lng = Number(form.office_lng.value);
+    if (Number.isFinite(lat) && Number.isFinite(lng) && form.office_lat.value && form.office_lng.value) setLoc(lat, lng, { zoom: true });
+  }));
+
+  let searchTimer;
+  $('#loc-search').oninput = (e) => {
+    clearTimeout(searchTimer);
+    const q = e.target.value.trim();
+    if (q.length < 3) return ($('#loc-results').innerHTML = '');
+    searchTimer = setTimeout(async () => {
+      $('#loc-results').innerHTML = '<p class="muted small">Searching…</p>';
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&accept-language=en,ar&q=${encodeURIComponent(q)}`);
+        const rows = await r.json();
+        $('#loc-results').innerHTML = rows.length
+          ? rows.map((x, i) => `<button type="button" class="list-item" data-i="${i}" style="background:none;border:0;border-bottom:1px solid var(--line);text-align:left;cursor:pointer;width:100%">${icon('pin')}<div class="grow"><strong>${esc(x.display_name.split(',')[0])}</strong><span>${esc(x.display_name)}</span></div></button>`).join('')
+          : '<p class="muted small">No results. Try a nearby landmark or paste a Google Maps link.</p>';
+        $$('#loc-results [data-i]').forEach((b) => (b.onclick = () => {
+          const x = rows[b.dataset.i];
+          pin?.setOpacity(1);
+          setLoc(x.lat, x.lon, { zoom: true, from: 'search' });
+          $('#loc-results').innerHTML = '';
+        }));
+      } catch {
+        $('#loc-results').innerHTML = '<p class="muted small">Search is unavailable right now. Paste a Google Maps link instead.</p>';
+      }
+    }, 450);
+  };
+
+  $('#loc-link-go').onclick = (e) => act(e.currentTarget, async () => {
+    const url = $('#loc-link').value.trim();
+    if (!url) throw new Error('Paste a Google Maps link first');
+    const c = await api('/admin/resolve-map-link', { method: 'POST', body: { url } });
+    pin?.setOpacity(1);
+    setLoc(c.lat, c.lng, { zoom: true, from: 'Google Maps' });
   });
-  form.onsubmit = (e) => {
-    e.preventDefault();
+
+  $('#use-loc').onclick = (e) => act(e.currentTarget, async () => {
+    const btn = e.currentTarget;
+    btn.innerHTML = `${icon('pin')}Finding you…`;
+    try {
+      const p = await getPosition();
+      pin?.setOpacity(1);
+      setLoc(p.lat, p.lng, { zoom: true });
+      toast(`Location found (±${Math.round(p.accuracy)} m). Drag the pin if needed, then save.`, 'success');
+    } finally {
+      btn.innerHTML = `${icon('pin')}Use my current location`;
+    }
+  });
+
+  $('#test-loc').onclick = (e) => act(e.currentTarget, async () => {
+    const lat = Number(form.office_lat.value);
+    const lng = Number(form.office_lng.value);
+    if (!form.office_lat.value || !Number.isFinite(lat)) throw new Error('Set the office location first');
+    const p = await getPosition();
+    const R = 6371000;
+    const rad = (d) => (d * Math.PI) / 180;
+    const a = Math.sin(rad(p.lat - lat) / 2) ** 2 + Math.cos(rad(lat)) * Math.cos(rad(p.lat)) * Math.sin(rad(p.lng - lng) / 2) ** 2;
+    const dist = Math.round(2 * R * Math.asin(Math.sqrt(a)));
+    const ok = dist <= Number(form.radius_m.value) && p.accuracy <= Number(form.max_accuracy_m.value);
+    modal({
+      title: ok ? 'You can check in from here ✅' : 'Check-in would be refused ❌',
+      sub: `Distance from office: <strong>${dist} m</strong> (allowed ${form.radius_m.value} m)<br>GPS precision: <strong>±${Math.round(p.accuracy)} m</strong> (allowed ±${form.max_accuracy_m.value} m)`,
+      body: '',
+      submit: 'OK',
+      onSubmit: async () => {},
+    });
+  });
+
+  const save = async (btn, msg) => {
     const d = formData(form);
     delete d.wd;
     const body = {
@@ -2221,15 +2425,26 @@ async function viewSettings() {
       work_days: $$('[name=wd]:checked', form).map((c) => Number(c.value)),
       office_lat: d.office_lat === '' ? null : Number(d.office_lat),
       office_lng: d.office_lng === '' ? null : Number(d.office_lng),
+      departments: $$('#depts [data-dept]').map((c) => c.dataset.dept),
+      device_lock: !!form.device_lock.checked,
     };
     for (const k of ['radius_m', 'max_accuracy_m', 'very_late_reds', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'kudos_daily_limit', 'kudos_green']) body[k] = Number(body[k]);
-    body.departments = $$('#depts [data-dept]').map((c) => c.dataset.dept);
-    body.device_lock = !!form.device_lock.checked;
-    act(e.submitter, async () => {
+    return act(btn, async () => {
       const saved = await api('/admin/settings', { method: 'PUT', body });
       company = saved.company_name;
-      route();
-    }, 'Settings saved');
+      $('#dirty').textContent = 'All changes saved';
+      $('#loc-status').className = `chip ${saved.office_lat == null ? 'amber' : 'lime'}`;
+      $('#loc-status').textContent = saved.office_lat == null ? 'Not set yet' : 'Saved ✓';
+      if (saved.office_lat != null) confetti({ count: 60 });
+    }, msg);
+  };
+  $('#save-loc').onclick = (e) => {
+    if (!form.office_lat.value) return toast('Pick the office on the map first', 'error');
+    save(e.currentTarget, 'Office location saved. Staff can check in now 🎉');
+  };
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    save(e.submitter, 'Settings saved');
   };
 }
 

@@ -663,3 +663,11 @@ a.tile:hover::after, button.tile:hover::after, label.tile:hover::after { transfo
 .mood-inline { font-style: normal; font-weight: 400; }
 .kudo .row { flex-wrap: wrap; }
 @media (max-width: 640px) { .m-first { order: -1; } }
+
+/* Office location picker */
+.loc-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 18px; }
+#map { height: 440px; border-radius: 20px; overflow: hidden; border: 1px solid var(--line); background: var(--sunken); z-index: 0; }
+#loc-results .list-item:hover { background: var(--sunken); }
+@media (max-width: 900px) { .loc-grid { grid-template-columns: 1fr; } #map { height: 320px; } }
+:root[data-theme="dark"] #map .leaflet-tile-pane { filter: brightness(.75) contrast(1.1) saturate(.8); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) #map .leaflet-tile-pane { filter: brightness(.75) contrast(1.1) saturate(.8); } }
