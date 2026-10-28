@@ -45,7 +45,13 @@ Staff attendance and management system for Bahr Network. It covers GPS check-in,
 - **Command palette:** press `⌘K` / `Ctrl+K` or `/` to jump to any page, employee or action.
 - **Notifications:** the owner sees pending requests; employees see decisions on their leave and reward requests.
 - **Leaderboard** of the month's green points, a personal attendance calendar, an on-time streak and progress toward the next reward.
-- Mobile-first, with a bottom navigation bar on phones. It can be installed to the home screen.
+- **Installable app (PWA)** on Android, iPhone and desktop:
+  - Home-screen icon, full-screen and safe-area aware (notch, home bar), app shortcuts and an app-icon badge.
+  - Works offline (cached app shell). Dialogs open as bottom sheets, and the browser never zooms into text fields on phones.
+- **Push notifications** (Web Push, VAPID keys generated automatically on first use, or set `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`):
+  - Morning check-in reminders, kudos, leave and reward decisions, owner point adjustments and announcements.
+  - Owners also get new requests and blocked sign-ins.
+  - On iPhone (iOS 16.4+), notifications work once the app is added to the Home Screen.
 
 Absences are recorded automatically. Each work day an active employee missed (no check-in and no approved leave) becomes 1 black point.
 
@@ -71,7 +77,7 @@ Absences are recorded automatically. Each work day an active employee missed (no
 4. **Redeploy** so the new environment variables are picked up.
 5. Open the site. On the first visit you create the owner account. Then go to **Settings** and set the office location.
 
-Tables are created automatically on first request. Absences are recorded whenever the app is used (at most every 5 minutes) and once a day by Vercel Cron (`vercel.json`, 10:30 UTC).
+Tables are created automatically on first request. Absences are recorded whenever the app is used (at most every 5 minutes). Once a day, Vercel Cron calls `/api/cron/daily` (`vercel.json`, 04:30 UTC, about 06:30–07:30 Cairo time): it records absences and sends the morning check-in reminder.
 
 ## Run locally
 

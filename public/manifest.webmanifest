@@ -1,11 +1,27 @@
 {
-  "name": "Bahr Network — Attendance",
+  "id": "/",
+  "name": "Bahr Network",
   "short_name": "Bahr",
+  "description": "Attendance, points, kudos and team life at Bahr Network.",
   "lang": "en",
   "dir": "ltr",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
   "background_color": "#eef3f1",
   "theme_color": "#2f3432",
-  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Check in", "short_name": "Check in", "url": "/?source=shortcut#/", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Team Wall", "short_name": "Wall", "url": "/?source=shortcut#/wall", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Request leave", "short_name": "Leave", "url": "/?source=shortcut#/leaves", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
 }

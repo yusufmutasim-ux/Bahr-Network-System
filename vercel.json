@@ -4,5 +4,9 @@
   "buildCommand": "",
   "outputDirectory": "public",
   "rewrites": [{ "source": "/api/(.*)", "destination": "/api" }],
-  "crons": [{ "path": "/api/cron/absences", "schedule": "30 10 * * *" }]
+  "headers": [
+    { "source": "/sw.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }, { "key": "Service-Worker-Allowed", "value": "/" }] },
+    { "source": "/manifest.webmanifest", "headers": [{ "key": "Content-Type", "value": "application/manifest+json" }] }
+  ],
+  "crons": [{ "path": "/api/cron/daily", "schedule": "30 4 * * *" }]
 }

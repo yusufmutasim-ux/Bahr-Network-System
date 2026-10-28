@@ -626,6 +626,188 @@ function checkMilestones(a) {
   }
 }
 
+// ---------- App (PWA): install, push notifications, badge ----------
+
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+});
+window.addEventListener('appinstalled', () => {
+  installPrompt = null;
+  toast('App installed! Open Bahr from your home screen 🎉', 'success');
+});
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  // A push arrived while the app is open: refresh badges and the current page's live data.
+  navigator.serviceWorker.addEventListener('message', async (e) => {
+    if (e.data?.type !== 'push' || !me) return;
+    await refreshCounts();
+    renderShell(parseHash().path);
+    $('#bell-btn').classList.add('shake');
+    setTimeout(() => $('#bell-btn').classList.remove('shake'), 900);
+  });
+}
+
+function canInstall() {
+  if (isStandalone()) return false;
+  return !!installPrompt || IS_IOS;
+}
+
+async function installApp() {
+  if (installPrompt) {
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    installPrompt = null;
+    if (outcome === 'accepted') confetti({ count: 80 });
+    return;
+  }
+  const safari = !/CriOS|FxiOS|EdgiOS/.test(UA);
+  modal({
+    title: 'Install Bahr on your iPhone 📲',
+    sub: 'It takes 10 seconds and works like a normal app, including notifications.',
+    body: `<ol class="grid" style="gap:12px;padding-left:20px;margin:0">
+      <li>Tap the <strong>Share</strong> button <span class="chip">⬆️</span> ${safari ? 'at the bottom of Safari' : 'in the address bar'}.</li>
+      <li>Scroll and tap <strong>Add to Home Screen</strong> <span class="chip">➕</span>.</li>
+      <li>Tap <strong>Add</strong>, then open <strong>Bahr</strong> from your home screen.</li>
+      <li>Inside the app, turn on notifications from <strong>Account</strong>.</li></ol>`,
+    submit: 'Got it',
+    onSubmit: async () => {},
+  });
+}
+
+function pushSupport() {
+  if (!('serviceWorker' in navigator) || !('Notification' in window) || !('PushManager' in window)) {
+    return IS_IOS && !isStandalone() ? 'needs-install' : 'unsupported';
+  }
+  return Notification.permission; // 'default' | 'granted' | 'denied'
+}
+
+function b64ToBytes(b64) {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+
+async function subscribePush() {
+  const reg = await navigator.serviceWorker.ready;
+  const { publicKey } = await api('/push/key');
+  let sub = await reg.pushManager.getSubscription();
+  const key = b64ToBytes(publicKey);
+  const sameKey = sub && sub.options?.applicationServerKey && new Uint8Array(sub.options.applicationServerKey).every((v, i) => v === key[i]);
+  if (sub && !sameKey) {
+    await sub.unsubscribe();
+    sub = null;
+  }
+  sub ||= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+  await api('/push/subscribe', { method: 'POST', body: sub.toJSON() });
+  return sub;
+}
+
+async function enablePush() {
+  const state = pushSupport();
+  if (state === 'needs-install') {
+    const err = new Error('On iPhone, notifications work once the app is on your Home Screen.');
+    err.help = ['Install the app first (Share → Add to Home Screen).', 'Open Bahr from your home screen.', 'Go to Account → turn on notifications.'];
+    throw err;
+  }
+  if (state === 'unsupported') throw new Error('This browser does not support notifications. Try Chrome or Safari.');
+  const perm = state === 'granted' ? 'granted' : await Notification.requestPermission();
+  if (perm !== 'granted') {
+    const err = new Error('Notifications are blocked for this site.');
+    err.help = IS_IOS
+      ? ['Open iPhone Settings → Notifications → Bahr → Allow Notifications.', 'Come back to the app and try again.']
+      : IS_ANDROID
+        ? ['Tap the 🔒 icon next to the address (or long-press the app icon → App info).', 'Notifications → Allow.', 'Come back and try again.']
+        : ['Click the 🔒 icon at the left of the address bar → Notifications → Allow.', 'Reload the page and try again.'];
+    throw err;
+  }
+  await subscribePush();
+  store.set('push', 'on');
+}
+
+async function disablePush() {
+  const reg = await navigator.serviceWorker?.ready;
+  const sub = await reg?.pushManager.getSubscription();
+  if (sub) {
+    await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {});
+    await sub.unsubscribe();
+  }
+  store.set('push', 'off');
+}
+
+// Keep the server's copy of this device's subscription in sync (e.g. after signing in).
+async function syncPush() {
+  try {
+    if (pushSupport() === 'granted' && store.get('push', 'on') !== 'off') await subscribePush();
+  } catch { /* best effort */ }
+}
+
+function setBadge(n) {
+  try {
+    if (n) navigator.setAppBadge?.(n);
+    else navigator.clearAppBadge?.();
+  } catch { /* unsupported */ }
+}
+
+// "Get the app" + "Turn on notifications" prompts shown on the home pages (dismissible).
+function appPromptsHtml() {
+  const out = [];
+  if (canInstall() && store.get('hide-install') !== '1') {
+    out.push(`<div class="announce sky" data-prompt="install"><span class="em float">📲</span>
+      <div style="flex:1;min-width:0"><h3>Get the Bahr app</h3><p>Install it on your ${IS_IOS ? 'iPhone' : IS_ANDROID ? 'phone' : 'device'} for one-tap check-in and notifications.</p></div>
+      <div class="row" style="gap:6px"><button class="btn sm" data-install>Install</button><button class="icon-btn xs ghost" data-hide="install" aria-label="Dismiss">${icon('x')}</button></div></div>`);
+  }
+  const ps = pushSupport();
+  if ((ps === 'default' || (ps === 'granted' && store.get('push') === 'off')) && store.get('hide-push') !== '1') {
+    out.push(`<div class="announce lime" data-prompt="push"><span class="em float">🔔</span>
+      <div style="flex:1;min-width:0"><h3>Turn on notifications</h3><p>${me.role === 'owner' ? 'Get notified about new requests and blocked sign-ins.' : 'Morning reminders, kudos from teammates and request updates.'}</p></div>
+      <div class="row" style="gap:6px"><button class="btn sm" data-enable-push>Turn on</button><button class="icon-btn xs ghost" data-hide="push" aria-label="Dismiss">${icon('x')}</button></div></div>`);
+  }
+  return out.length ? `<div class="grid" style="gap:10px;margin-bottom:16px">${out.join('')}</div>` : '';
+}
+
+document.addEventListener('click', (e) => {
+  const inst = e.target.closest('[data-install]');
+  if (inst) return installApp();
+  const en = e.target.closest('[data-enable-push]');
+  if (en) {
+    return act(en, async () => {
+      await enablePush();
+      en.closest('[data-prompt]')?.remove();
+      confetti({ count: 70 });
+      await api('/push/test', { method: 'POST', body: {} }).catch(() => {});
+    }, 'Notifications are on 🔔');
+  }
+  const hide = e.target.closest('[data-hide]');
+  if (hide) {
+    store.set(`hide-${hide.dataset.hide}`, '1');
+    hide.closest('[data-prompt]')?.remove();
+  }
+});
+
+// Coming back to the app after a while: refresh live pages (not forms being edited).
+let lastActive = Date.now();
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible') {
+    lastActive = Date.now();
+    return;
+  }
+  if (!me || Date.now() - lastActive < 60000) return;
+  if ($('#modal').open || $('#palette').open || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) return;
+  await refreshCounts();
+  if (['', 'wall', 'leaderboard', 'people', 'profile'].includes(parseHash().path)) route();
+  else renderShell(parseHash().path);
+});
+
+window.addEventListener('online', () => {
+  if (!me) start();
+  else toast('Back online ✓', 'success');
+});
+window.addEventListener('offline', () => toast("You're offline. Changes won't save until you reconnect.", 'error'));
+
 // ---------- State ----------
 
 let me = null;
@@ -719,6 +901,7 @@ function renderShell(active = parseHash().path) {
   $('#menu-btn').innerHTML = icon('menu');
   $('.search-ico').innerHTML = icon('search');
   $('#bell-btn').innerHTML = `${icon('bell')}${notifCount() ? `<span class="badge-dot">${notifCount()}</span>` : ''}`;
+  setBadge(notifCount());
   paintThemeButtons();
 
   $('#nav').innerHTML = navItems()
@@ -794,6 +977,11 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function logout() {
+  try {
+    const sub = await (await navigator.serviceWorker?.ready)?.pushManager.getSubscription();
+    if (sub) await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
+  } catch { /* ignore */ }
+  setBadge(0);
   await api('/logout', { method: 'POST', body: {} }).catch(() => {});
   location.hash = '';
   start();
@@ -831,7 +1019,7 @@ async function start() {
     const data = await api('/me');
     me = data.user;
     company = data.company_name;
-    document.title = `${company} — Attendance`;
+    document.title = company;
     $('#shell').hidden = false;
     await refreshCounts();
     await route();
@@ -840,6 +1028,7 @@ async function start() {
       setTimeout(() => $('#bell-btn').classList.remove('shake'), 900);
     }
     setTimeout(celebrateNews, 700);
+    syncPush();
   } catch {
     try {
       const setup = await api('/setup');
@@ -847,7 +1036,11 @@ async function start() {
       setup.needsSetup ? viewSetup() : viewLogin();
     } catch (err) {
       $('#auth').hidden = false;
-      $('#auth').innerHTML = `<div class="auth-form" style="grid-column:1/-1"><div class="card"><div class="notice pink">${icon('alert')}${esc(err.message)}</div></div></div>`;
+      $('#auth').innerHTML = navigator.onLine
+        ? `<div class="auth-form" style="grid-column:1/-1"><div class="card"><div class="notice pink">${icon('alert')}${esc(err.message)}</div></div></div>`
+        : `<div class="auth-form" style="grid-column:1/-1"><div class="card" style="text-align:center"><div style="font-size:3rem">📡</div>
+            <h2 style="margin:10px 0 6px">You're offline</h2><p class="muted">Check your internet connection. Bahr will reconnect automatically.</p>
+            <button class="btn mt" onclick="location.reload()">${icon('refresh')}Try again</button></div></div>`;
     }
   }
 }
@@ -1215,6 +1408,7 @@ async function viewEmployeeHome() {
       ${d.streak ? `<span class="chip pink">${icon('flame')}${d.streak}-day streak</span>` : ''}
       ${myRank ? `<a class="chip lime" href="#/leaderboard" style="text-decoration:none">${icon('trophy')}#${myRank} this month</a>` : ''}
       <a class="level-chip" href="#/profile" style="text-decoration:none"><b>${ach.level.level}</b>${esc(ach.level.name)}</a>`)}
+    ${appPromptsHtml()}
     ${pinned.length ? `<div class="grid" style="gap:10px;margin-bottom:16px">${pinned.map((x) => announceHtml(x, false, true)).join('')}</div>` : ''}
     <div class="dash">
       <div class="stack-col">
@@ -1607,6 +1801,15 @@ async function viewAccount() {
         </div>
       </div>
       <div class="stack-col">
+        <div class="card"><div class="card-head"><h2>App &amp; notifications</h2>${isStandalone() ? '<span class="chip lime">📲 Installed</span>' : ''}</div>
+          <div class="list">
+            <div class="list-item"><span class="avatar sm lime">🔔</span><div class="grow"><strong>Push notifications</strong><span id="push-state"></span></div>
+              <label class="toggle"><input type="checkbox" id="push-toggle"></label></div>
+            ${canInstall() ? `<div class="list-item"><span class="avatar sm sky">📲</span><div class="grow"><strong>Install the app</strong><span>Home-screen icon, full screen, faster check-in</span></div>
+              <button class="btn sm" data-install>Install</button></div>` : ''}
+          </div>
+          <button class="btn light sm mt" id="push-test">${icon('bell')}Send me a test notification</button>
+        </div>
         <div class="card"><div class="card-head"><h2>Appearance</h2></div>
           <div class="seg" id="theme-seg">${['system', 'light', 'dark']
             .map((t) => `<button type="button" data-t="${t}" class="${theme === t ? 'on' : ''}">${icon(t === 'dark' ? 'moon' : t === 'light' ? 'sun' : 'settings')}${t[0].toUpperCase() + t.slice(1)}</button>`)
@@ -1627,6 +1830,33 @@ async function viewAccount() {
     setTheme(b.dataset.t);
     $$('#theme-seg button').forEach((x) => x.classList.toggle('on', x === b));
   }));
+  const paintPush = () => {
+    const st = pushSupport();
+    const on = st === 'granted' && store.get('push', 'on') !== 'off';
+    $('#push-toggle').checked = on;
+    $('#push-toggle').disabled = st === 'unsupported';
+    $('#push-state').textContent = {
+      'needs-install': 'Install the app to your Home Screen first (iPhone)',
+      unsupported: 'Not supported in this browser',
+      denied: 'Blocked in browser settings. Tap to see how to allow',
+      default: 'Off. Turn on for reminders, kudos and updates',
+      granted: on ? 'On for this device' : 'Off for this device',
+    }[st];
+  };
+  paintPush();
+  $('#push-toggle').onchange = async (e) => {
+    const want = e.target.checked;
+    const ok = await act(e.target, async () => {
+      if (want) await enablePush();
+      else await disablePush();
+    }, want ? 'Notifications are on 🔔' : 'Notifications turned off');
+    if (ok && want) confetti({ count: 60 });
+    paintPush();
+  };
+  $('#push-test').onclick = (e) => act(e.currentTarget, async () => {
+    if (pushSupport() !== 'granted' || store.get('push') === 'off') await enablePush();
+    await api('/push/test', { method: 'POST', body: {} });
+  }, 'Test sent. Check your notifications');
   $('#sound').onchange = (e) => {
     store.set('sound', e.target.checked ? 'on' : 'off');
     if (e.target.checked) chime('success');
@@ -1674,6 +1904,7 @@ async function viewOwnerDashboard(params) {
       <input type="date" id="date" value="${o.date}" style="width:170px">
       <button class="btn light" id="add-emp">${icon('plus')}Add employee</button>
       <a class="btn" href="/api/admin/report.csv?month=${o.date.slice(0, 7)}">${icon('download')}Export</a>`)}
+    ${appPromptsHtml()}
     ${r.location_set ? '' : `<a class="announce amber" href="#/settings" style="text-decoration:none;margin-bottom:16px"><span class="em float">📍</span>
       <div style="flex:1"><h3>Set your office location</h3><p>Staff can't check in until the office is on the map. It takes 30 seconds: search, paste a Google Maps link or tap the map.</p></div>
       <span class="btn sm">Set location</span></a>`}
@@ -1766,7 +1997,7 @@ async function viewOwnerDashboard(params) {
           .map(
             (x) => `<div class="list-item">${avatar(x.name)}
               <div class="grow"><strong>${esc(x.name)} ${x.mood ? `<i class="mood-inline" title="Mood: ${MOODS[x.mood][1]}">${MOODS[x.mood][0]}</i>` : ''}</strong><span>${esc(x.department || x.job_title || 'Staff')}${x.mode === 'remote' ? ' · 🌍 Remote' : x.distance_m != null ? ` · ${Math.round(x.distance_m)} m away` : ''}</span></div>
-              <div class="tiny muted nowrap" style="text-align:right">${x.check_in_time ? `In ${fmtTime(x.check_in_time)}` : ''}${x.check_out_time ? `<br>Out ${fmtTime(x.check_out_time)}` : ''}</div>
+              <div class="tiny muted nowrap" style="text-align:right">${x.check_in_time ? `In ${fmtTime(x.check_in_time)}` : ''}${x.check_out_time ? `<br><span class="m-sep">· </span>Out ${fmtTime(x.check_out_time)}` : ''}</div>
               ${chip(STATUS, x.status)}
               ${x.check_in_time ? `<a class="icon-btn xs" href="#/staff?id=${x.id}" aria-label="Profile">${icon('arrow')}</a>` : `<button class="icon-btn xs" data-manual="${x.id}" data-name="${esc(x.name)}" aria-label="Record manually" title="Record manually">${icon('pen')}</button>`}
             </div>`,

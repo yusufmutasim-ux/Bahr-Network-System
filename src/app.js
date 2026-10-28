@@ -18,6 +18,7 @@ const {
 const auth = require('./auth');
 const { registerCulture } = require('./culture');
 const { resolveMapLink } = require('./maplink');
+const push = require('./push');
 
 const PAYOUT_METHODS = ['instapay', 'vodafone_cash', 'cash'];
 const ABSENCE_JOB_INTERVAL_MS = 5 * 60 * 1000;
@@ -145,6 +146,12 @@ function createApp(db, { now = () => new Date() } = {}) {
   async function checkDevice(user, device, label, kind) {
     const block = async (reason, message) => {
       await db.run('INSERT INTO device_blocks (user_id, reason, device_label) VALUES (?, ?, ?)', [user.id, reason, label]);
+      const who = await db.get('SELECT name FROM users WHERE id = ?', [user.id]);
+      await push.notifyRole(db, 'owner', {
+        title: '🔒 Blocked sign-in',
+        body: `${who?.name || 'An employee'}'s account was used on an unknown device (${label}).`,
+        url: '/#/employees', tag: `device-${user.id}`,
+      });
       fail(message, 403, 'device_locked');
     };
     const known = await db.get('SELECT id, user_id FROM user_devices WHERE device_hash = ?', [device]);
@@ -190,12 +197,60 @@ function createApp(db, { now = () => new Date() } = {}) {
   });
 
   // Called daily by Vercel Cron (see vercel.json). Requests are also covered lazily by maybeRunAbsences.
+  const cronAllowed = (req) => !process.env.CRON_SECRET || req.headers.authorization === `Bearer ${process.env.CRON_SECRET}`;
+
   app.get('/api/cron/absences', async (req, res) => {
-    if (process.env.CRON_SECRET && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+    if (!cronAllowed(req)) return res.status(401).json({ error: 'Unauthorized' });
     const added = await runAbsenceJob(db, await settings(), now());
     res.json({ added });
+  });
+
+  // Daily (Vercel Cron, early morning): record absences and remind staff to check in.
+  app.get('/api/cron/daily', async (req, res) => {
+    if (!cronAllowed(req)) return res.status(401).json({ error: 'Unauthorized' });
+    const s = await settings();
+    const t = localToday(s);
+    const added = await runAbsenceJob(db, s, now());
+    let reminded = 0;
+    if (isWorkDay(t.date, s)) {
+      const due = await db.all(
+        `SELECT u.id FROM users u
+         WHERE u.role = 'employee' AND u.active = 1 AND u.start_date <= ?
+           AND NOT EXISTS (SELECT 1 FROM attendance a WHERE a.user_id = u.id AND a.work_date = ?)
+           AND NOT EXISTS (SELECT 1 FROM leave_requests l WHERE l.user_id = u.id AND l.status = 'approved' AND ? BETWEEN l.from_date AND l.to_date)`,
+        [t.date, t.date, t.date],
+      );
+      reminded = await push.notifyUsers(db, due.map((u) => u.id), {
+        title: 'Good morning ☀️',
+        body: `Check in between ${s.early_start} and ${s.early_end} to earn a green point. Have a great day!`,
+        url: '/#/', tag: `remind-${t.date}`,
+      });
+    }
+    res.json({ added, reminded });
+  });
+
+  // ----- Push notifications -----
+
+  app.get('/api/push/key', requireUser, async (req, res) => {
+    res.json({ publicKey: (await push.getVapid(db)).publicKey });
+  });
+
+  app.post('/api/push/subscribe', requireUser, async (req, res) => {
+    if (!(await push.saveSubscription(db, req.user.id, req.body, req.headers['user-agent']))) fail('Invalid subscription');
+    res.status(201).json({ ok: true });
+  });
+
+  app.post('/api/push/unsubscribe', requireUser, async (req, res) => {
+    await db.run('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?', [str(req.body.endpoint, 1000), req.user.id]);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/push/test', requireUser, async (req, res) => {
+    const sent = await push.notifyUsers(db, [req.user.id], {
+      title: 'Notifications are on 🎉', body: `You'll hear about kudos, requests and reminders here.`, url: '/#/', tag: 'test',
+    });
+    if (!sent) fail('No device of yours is subscribed yet. Turn notifications on first.');
+    res.json({ sent });
   });
 
   // ---------- Employee ----------
@@ -324,6 +379,11 @@ function createApp(db, { now = () => new Date() } = {}) {
       'INSERT INTO leave_requests (user_id, from_date, to_date, reason) VALUES (?, ?, ?, ?) RETURNING *',
       [req.user.id, from, to, str(req.body.reason, 500) || null],
     );
+    await push.notifyRole(db, 'owner', {
+      title: `🗓️ Leave request from ${req.user.name}`,
+      body: `${from === to ? from : `${from} → ${to}`}${row.reason ? ` · ${row.reason}` : ''}`,
+      url: '/#/leaves', tag: `leave-${row.id}`,
+    });
     res.status(201).json(row);
   });
 
@@ -363,6 +423,11 @@ function createApp(db, { now = () => new Date() } = {}) {
         source: 'reward', reason: 'Reward request', refId: r.id,
       });
       return r;
+    });
+    await push.notifyRole(db, 'owner', {
+      title: `🎁 Reward request from ${req.user.name}`,
+      body: `${row.points} points = ${row.amount} ${s.currency} via ${row.method.replace('_', ' ')}`,
+      url: '/#/rewards', tag: `reward-${row.id}`,
     });
     res.status(201).json(row);
   });
@@ -616,6 +681,12 @@ function createApp(db, { now = () => new Date() } = {}) {
       }
       await addPoints(tx, { userId, kind, delta, workDate, source: 'manual', reason, createdBy: req.user.id });
     });
+    const em = { green: '🟢', red: '🔴', black: '⚫' }[kind];
+    await push.notifyUsers(db, [userId], {
+      title: `${em} ${delta > 0 ? '+' : ''}${delta} ${kind} point${Math.abs(delta) === 1 ? '' : 's'}`,
+      body: reason,
+      url: '/#/history', tag: `points-${userId}`,
+    });
     res.status(201).json({ ok: true });
   });
 
@@ -666,7 +737,7 @@ function createApp(db, { now = () => new Date() } = {}) {
   app.post('/api/admin/leaves/:id/decision', requireOwner, async (req, res) => {
     const decision = req.body.decision;
     if (!['approve', 'reject'].includes(decision)) fail('Invalid decision');
-    await db.tx(async (tx) => {
+    const l = await db.tx(async (tx) => {
       const l = await tx.get(
         `UPDATE leave_requests SET status = ?, decided_by = ?, decided_at = now()
          WHERE id = ? AND status = 'pending' RETURNING *`,
@@ -681,6 +752,12 @@ function createApp(db, { now = () => new Date() } = {}) {
           l.to_date,
         ]);
       }
+      return l;
+    });
+    await push.notifyUsers(db, [l.user_id], {
+      title: decision === 'approve' ? '✅ Leave approved' : '❌ Leave request declined',
+      body: `${l.from_date === l.to_date ? l.from_date : `${l.from_date} → ${l.to_date}`}${decision === 'approve' ? '. Enjoy your time off!' : ''}`,
+      url: '/#/leaves', tag: `leave-${l.id}`,
     });
     res.json({ ok: true });
   });
@@ -700,7 +777,7 @@ function createApp(db, { now = () => new Date() } = {}) {
     const decision = req.body.decision;
     if (!['paid', 'reject'].includes(decision)) fail('Invalid decision');
     const s = await settings();
-    await db.tx(async (tx) => {
+    const r = await db.tx(async (tx) => {
       const r = await tx.get(
         `UPDATE reward_requests SET status = ?, decided_by = ?, decided_at = now()
          WHERE id = ? AND status = 'pending' RETURNING *`,
@@ -708,6 +785,12 @@ function createApp(db, { now = () => new Date() } = {}) {
       );
       if (!r) fail('Request not found or already decided', 404);
       if (decision === 'reject') await refundReward(tx, s, r, req.user.id);
+      return r;
+    });
+    await push.notifyUsers(db, [r.user_id], {
+      title: decision === 'paid' ? '💸 Your reward was paid!' : 'Reward request declined',
+      body: decision === 'paid' ? `${r.amount} ${s.currency} is on its way. Well deserved!` : `Your ${r.points} points were returned to your balance.`,
+      url: '/#/rewards', tag: `reward-${r.id}`,
     });
     res.json({ ok: true });
   });

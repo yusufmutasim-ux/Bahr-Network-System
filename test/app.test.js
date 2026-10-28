@@ -288,6 +288,22 @@ test('device lock: one phone + one laptop per employee, owner unrestricted', asy
   await owner('/admin/settings', { method: 'PUT', body: { ...s, device_lock: true } });
 });
 
+test('push: key, subscribe, triggers never break requests, daily cron', async () => {
+  const key = await emp('/push/key');
+  assert.equal(key.status, 200);
+  assert.ok(key.body.publicKey.length > 40);
+  assert.equal((await emp('/push/subscribe', { method: 'POST', body: { endpoint: 'nope' } })).status, 400);
+  // An unreachable push endpoint: sending fails, but the request that triggered it must still succeed.
+  const sub = { endpoint: 'https://127.0.0.1:9/push/abc', keys: { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' } };
+  assert.equal((await owner('/push/subscribe', { method: 'POST', body: sub })).status, 201);
+  assert.equal((await emp('/me/leaves', { method: 'POST', body: { from_date: '2026-02-01', to_date: '2026-02-01' } })).status, 201);
+  assert.equal((await owner('/push/test', { method: 'POST', body: {} })).status, 400); // nothing delivered
+  assert.equal((await owner('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } })).status, 200);
+  const daily = await emp('/cron/daily');
+  assert.equal(daily.status, 200);
+  assert.equal(typeof daily.body.reminded, 'number');
+});
+
 test('rejects non-JSON writes', async () => {
   const res = await fetch(`${base}/api/login`, { method: 'POST', body: 'username=a&password=b', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
   assert.equal(res.status, 415);

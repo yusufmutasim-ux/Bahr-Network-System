@@ -1,3 +1,5 @@
+const push = require('./push');
+
 // Team culture features: kudos wall, announcements, people directory, XP levels and badges.
 
 const KUDOS_CATEGORIES = ['creative', 'teamwork', 'extra_mile', 'client_hero', 'good_vibes', 'mentor'];
@@ -185,6 +187,13 @@ function registerCulture(app, ctx) {
       }
       return k;
     });
+    const [em, label] = { creative: ['💡', 'Creative Spark'], teamwork: ['🤝', 'Team Player'], extra_mile: ['🚀', 'Extra Mile'],
+      client_hero: ['🎯', 'Client Hero'], good_vibes: ['😄', 'Good Vibes'], mentor: ['🧠', 'Mentor'] }[category];
+    await push.notifyUsers(db, [to], {
+      title: `${em} ${req.user.name} sent you kudos!`,
+      body: message ? `${label}: "${message}"` : label,
+      url: '/#/profile', tag: `kudos-${row.id}`,
+    });
     res.status(201).json(row);
   });
 
@@ -230,9 +239,11 @@ function registerCulture(app, ctx) {
     const kind = ANNOUNCEMENT_KINDS.includes(req.body.kind) ? req.body.kind : 'news';
     if (!title) fail('Title is required');
     const row = await db.get(
-      'INSERT INTO announcements (title, body, kind, pinned, created_by) VALUES (?, ?, ?, ?, ?) RETURNING *',
-      [title, body || null, kind, req.body.pinned ? 1 : 0, req.user.id],
+      'INSERT INTO announcements (title, body, kind, pinned, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING *',
+      [title, body || null, kind, req.body.pinned ? 1 : 0, req.user.id, now().toISOString()],
     );
+    const em = { news: '📰', celebration: '🎉', event: '📅', alert: '⚠️' }[kind];
+    await push.notifyAll(db, { title: `${em} ${title}`, body: body || 'New announcement on the Team Wall', url: '/#/wall', tag: `ann-${row.id}` }, req.user.id);
     res.status(201).json(row);
   });
 

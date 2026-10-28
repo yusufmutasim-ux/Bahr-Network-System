@@ -103,6 +103,16 @@ INSERT INTO user_devices (user_id, kind, device_hash, label, bound_at)
   FROM users WHERE device_hash IS NOT NULL
   ON CONFLICT DO NOTHING;
 UPDATE users SET device_hash = NULL, device_label = NULL, device_bound_at = NULL WHERE device_hash IS NOT NULL;
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS device_blocks (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
