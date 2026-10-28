@@ -57,6 +57,7 @@ const ICONS = {
   ban: '<circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/>',
   lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   phoneLock: '<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
   heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
   megaphone: '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
   flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>',
@@ -181,6 +182,11 @@ const localISODate = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 const thisMonth = () => localISODate().slice(0, 7);
+function eachDay(from, to) {
+  const out = [];
+  for (let d = toDate(from); d <= toDate(to) && out.length < 400; d.setUTCDate(d.getUTCDate() + 1)) out.push(d.toISOString().slice(0, 10));
+  return out;
+}
 const toMin = (t) => {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
@@ -766,7 +772,7 @@ function appPromptsHtml() {
       <div style="flex:1;min-width:0"><h3>Turn on notifications</h3><p>${me.role === 'owner' ? 'Get notified about new requests and blocked sign-ins.' : 'Morning reminders, kudos from teammates and request updates.'}</p></div>
       <div class="row" style="gap:6px"><button class="btn sm" data-enable-push>Turn on</button><button class="icon-btn xs ghost" data-hide="push" aria-label="Dismiss">${icon('x')}</button></div></div>`);
   }
-  return out.length ? `<div class="grid" style="gap:10px;margin-bottom:16px">${out.join('')}</div>` : '';
+  return out.length ? `<div class="grid app-prompts" style="gap:10px;margin-bottom:16px">${out.join('')}</div>` : '';
 }
 
 document.addEventListener('click', (e) => {
@@ -1454,10 +1460,13 @@ async function viewEmployeeHome() {
       ${myRank ? `<a class="chip lime" href="#/leaderboard" style="text-decoration:none">${icon('trophy')}#${myRank} this month</a>` : ''}
       <a class="level-chip" href="#/profile" style="text-decoration:none"><b>${ach.level.level}</b>${esc(ach.level.name)}</a>`)}
     ${appPromptsHtml()}
+    ${celebrations.filter((c) => c.inDays === 0).map((c) => `<div class="announce pink m-only" style="margin-bottom:12px"><span class="em float">${c.kind === 'birthday' ? '🎂' : '🏆'}</span>
+      <div style="flex:1;min-width:0"><h3>${c.p.id === me.id ? 'Happy birthday to you!' : `${esc(c.p.name)}'s ${c.kind === 'birthday' ? 'birthday' : `${c.years}-year anniversary`} today`}</h3></div>
+      ${c.p.id === me.id ? '' : `<button class="btn sm" data-kudos-to="${c.p.id}" data-kudos-cat="good_vibes">🎉 Celebrate</button>`}</div>`).join('')}
     ${pinned.length ? `<div class="grid" style="gap:10px;margin-bottom:16px">${pinned.map((x) => announceHtml(x, false, true)).join('')}</div>` : ''}
     <div class="dash">
       <div class="stack-col">
-        <div class="card">
+        <div class="card m-hide">
           <div class="profile">
             <div class="photo ${hue(me.name)}">${esc(initials(me.name))}</div>
             <div class="meta">
@@ -1508,7 +1517,7 @@ async function viewEmployeeHome() {
         </div>
       </div>
 
-      <div class="stack-col">
+      <div class="stack-col m-hide">
         ${levelCard(ach)}
         <div class="quote"><p>${esc(quoteOfDay())}</p><small>Thought of the day · ${esc(company)}</small></div>
         <div class="card">
@@ -1649,58 +1658,110 @@ EMPLOYEE_NAV.find((n) => n.key === 'history').view = viewHistoryPage;
 // ---------- Employee: leave ----------
 
 async function viewMyLeaves() {
-  const list = await api('/me/leaves');
-  const today = localISODate();
+  const [list, d] = await Promise.all([api('/me/leaves'), api('/me/dashboard')]);
+  const r = d.rules;
+  const today = d.now.date;
+  const year = today.slice(0, 4);
+  const workDaysIn = (from, to) => (from && to && to >= from ? eachDay(from, to).filter((x) => r.work_days.includes(toDate(x).getUTCDay())).length : 0);
+  const usedThisYear = list.filter((l) => l.status === 'approved' && l.from_date.startsWith(year)).reduce((a, l) => a + workDaysIn(l.from_date, l.to_date), 0);
+  const pendingCount = list.filter((l) => l.status === 'pending').length;
+  const upcoming = list.filter((l) => l.status === 'pending' || (l.status === 'approved' && l.to_date >= today));
+  const past = list.filter((l) => !upcoming.includes(l));
+  const REASONS = [['🤒', 'Sick'], ['🏖️', 'Vacation'], ['👨‍👩‍👧', 'Family'], ['📚', 'Exam / study'], ['🏥', 'Appointment'], ['✏️', 'Other']];
+  const QUICK = [['today', 'Today', 0, 0], ['tomorrow', 'Tomorrow', 1, 1], ['2', '2 days', 0, 1], ['3', '3 days', 0, 2], ['week', '1 week', 0, 6]];
+
+  const item = (l) => {
+    const days = daysBetween(l.from_date, l.to_date) + 1;
+    return `<div class="leave-item">
+      <div class="leave-date ${REQ[l.status][1]}"><b>${toDate(l.from_date).getUTCDate()}</b><span>${toDate(l.from_date).toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })}</span></div>
+      <div class="grow"><strong>${l.from_date === l.to_date ? fmtDate(l.from_date) : `${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}`}</strong>
+        <span class="muted small">${days} day${days === 1 ? '' : 's'}${l.reason ? ` · ${esc(l.reason)}` : ''}</span></div>
+      <div class="leave-side">${chip(REQ, l.status)}${l.status === 'pending' ? `<button class="btn sm light" data-cancel="${l.id}">Cancel</button>` : ''}</div>
+    </div>`;
+  };
+
   $('#app').innerHTML = `
-    ${pageHead('Leave', 'Approved leave days never count as absences.')}
-    <div class="dash">
+    ${pageHead('Leave 🏖️', 'Approved leave days never count as absences.')}
+    <div class="grid g3 leave-stats" style="margin-bottom:16px">
+      ${tile('amber', 'Pending', pendingCount, 'waiting for approval', { big: true, arrow: false })}
+      ${tile('lime', 'Days off', usedThisYear, `approved in ${year}`, { big: true, arrow: false })}
+      ${tile('sky', 'Upcoming', upcoming.filter((l) => l.status === 'approved').length, 'approved leaves', { big: true, arrow: false })}
+    </div>
+    <div class="split">
       <div class="card">
-        <div class="card-head"><h2>Request leave 🏖️</h2></div>
-        <form id="leave" class="form-grid">
-          <label class="f">From<input type="date" name="from_date" min="${today}" value="${today}" required></label>
-          <label class="f">To<input type="date" name="to_date" min="${today}" value="${today}" required></label>
-          <div class="full chips" id="quick">
-            <button type="button" class="chip" data-days="1">1 day</button><button type="button" class="chip" data-days="2">2 days</button>
-            <button type="button" class="chip" data-days="3">3 days</button><button type="button" class="chip" data-days="7">1 week</button>
+        <div class="card-head"><h2>New request</h2></div>
+        <form id="leave" class="grid" style="gap:16px">
+          <div class="f"><span>When?</span>
+            <div class="seg quick" id="quick">${QUICK.map(([k, label]) => `<button type="button" data-q="${k}">${label}</button>`).join('')}</div></div>
+          <div class="form-grid two">
+            <label class="f">From<input type="date" name="from_date" min="${today}" value="${today}" required></label>
+            <label class="f">To<input type="date" name="to_date" min="${today}" value="${today}" required></label>
           </div>
-          <label class="f full">Reason (optional)<textarea name="reason" maxlength="500" placeholder="e.g. Sick leave, family event…"></textarea></label>
-          <div class="full row between"><span class="muted small" id="leave-len"></span><button class="btn" type="submit">${icon('flag')}Send request</button></div>
+          <div class="leave-summary" id="leave-sum"></div>
+          <div class="f"><span>Reason</span>
+            <div class="chips" id="reasons">${REASONS.map(([em, label]) => `<button type="button" class="chip" data-reason="${label}">${em} ${label}</button>`).join('')}</div>
+            <textarea name="reason" maxlength="500" rows="2" placeholder="Add a note for your manager (optional)" style="margin-top:8px;min-height:64px"></textarea></div>
+          <button class="btn xl block" type="submit">${icon('flag')}Send request</button>
         </form>
       </div>
-      <div class="card"><div class="card-head"><h2>My requests</h2><span class="chip">${list.length}</span></div>${
-        list.length
-          ? `<div class="list">${list
-              .map(
-                (l) => `<div class="list-item"><span class="avatar sm ${REQ[l.status][1]}">${icon('flag')}</span>
-                  <div class="grow"><strong>${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}</strong><span>${daysBetween(l.from_date, l.to_date) + 1} day(s)${l.reason ? ` · ${esc(l.reason)}` : ''}</span></div>
-                  ${chip(REQ, l.status)}${l.status === 'pending' ? `<button class="icon-btn xs" data-cancel="${l.id}" aria-label="Cancel request">${icon('x')}</button>` : ''}</div>`,
-              )
-              .join('')}</div>`
-          : empty('flag', 'No leave requests yet')
-      }</div>
+      <div class="card">
+        <div class="card-head"><h2>My requests</h2><span class="chip">${list.length}</span></div>
+        ${list.length
+          ? `${upcoming.length ? `<p class="list-label">Upcoming &amp; pending</p><div class="leave-list">${upcoming.map(item).join('')}</div>` : ''}
+             ${past.length ? `<p class="list-label">History</p><div class="leave-list">${past.map(item).join('')}</div>` : ''}`
+          : empty('flag', 'No leave requests yet')}
+      </div>
     </div>`;
+
   const form = $('#leave');
-  const len = () => {
-    const n = form.from_date.value && form.to_date.value ? daysBetween(form.from_date.value, form.to_date.value) + 1 : 0;
-    $('#leave-len').textContent = n > 0 ? `${n} day${n === 1 ? '' : 's'}` : 'End date must be after start';
+  const plus = (n) => {
+    const x = toDate(today);
+    x.setUTCDate(x.getUTCDate() + n);
+    return x.toISOString().slice(0, 10);
   };
-  form.oninput = len;
-  len();
-  $$('#quick [data-days]').forEach((b) => (b.onclick = () => {
-    const from = form.from_date.value || today;
-    const end = toDate(from);
-    end.setUTCDate(end.getUTCDate() + Number(b.dataset.days) - 1);
-    form.to_date.value = end.toISOString().slice(0, 10);
-    len();
+  const update = () => {
+    const from = form.from_date.value;
+    const to = form.to_date.value;
+    if (form.to_date.value && from && to < from) form.to_date.value = from;
+    form.to_date.min = from || today;
+    const total = from && form.to_date.value ? daysBetween(from, form.to_date.value) + 1 : 0;
+    const work = workDaysIn(from, form.to_date.value);
+    $('#leave-sum').innerHTML = total
+      ? `<span class="leave-sum-ico">📅</span><div><strong>${total} day${total === 1 ? '' : 's'}</strong>
+          <span class="muted small">${from === form.to_date.value ? fmtDate(from) : `${fmtDate(from)} → ${fmtDate(form.to_date.value)}`} · ${work} work day${work === 1 ? '' : 's'}</span></div>`
+      : '';
+    $$('#quick button').forEach((b) => {
+      const q = QUICK.find((x) => x[0] === b.dataset.q);
+      b.classList.toggle('on', from === plus(q[2]) && form.to_date.value === plus(q[3]));
+    });
+  };
+  form.oninput = update;
+  form.onchange = update;
+  $$('#quick button').forEach((b) => (b.onclick = () => {
+    const q = QUICK.find((x) => x[0] === b.dataset.q);
+    form.from_date.value = plus(q[2]);
+    form.to_date.value = plus(q[3]);
+    update();
   }));
+  $$('#reasons [data-reason]').forEach((b) => (b.onclick = () => {
+    $$('#reasons .chip').forEach((c) => c.classList.toggle('lime', c === b));
+    const cur = form.reason.value.trim();
+    const labels = REASONS.map((x) => x[1]);
+    form.reason.value = !cur || labels.includes(cur) ? b.dataset.reason : cur;
+  }));
+  update();
   form.onsubmit = (e) => {
     e.preventDefault();
-    act(e.submitter, async () => { await api('/me/leaves', { method: 'POST', body: formData(form) }); route(); }, 'Leave request sent');
+    act(e.submitter, async () => {
+      await api('/me/leaves', { method: 'POST', body: formData(form) });
+      confetti({ count: 50 });
+      route();
+    }, 'Leave request sent. Your manager has been notified');
   };
-  $$('[data-cancel]').forEach((b) => (b.onclick = () => act(b, async () => {
+  $$('[data-cancel]').forEach((b) => (b.onclick = () => confirmBox('Cancel this request?', 'Your manager will no longer see it.', async () => {
     await api(`/me/leaves/${b.dataset.cancel}/cancel`, { method: 'POST', body: {} });
     route();
-  }, 'Request cancelled')));
+  }, { submit: 'Cancel request' })));
 }
 
 // ---------- Employee: rewards ----------
@@ -1948,14 +2009,14 @@ async function viewOwnerDashboard(params) {
     ${pageHead(`${greeting()}, ${esc(me.name.split(' ')[0])} <span class="wave">👋</span>`, `${fmtLong(o.date)}${o.work_day ? '' : ' · not a work day'}`, `
       <input type="date" id="date" value="${o.date}" style="width:170px">
       <button class="btn light" id="add-emp">${icon('plus')}Add employee</button>
-      <a class="btn" href="/api/admin/report.csv?month=${o.date.slice(0, 7)}">${icon('download')}Export</a>`)}
+      <a class="btn m-hide" href="/api/admin/report.csv?month=${o.date.slice(0, 7)}">${icon('download')}Export</a>`)}
     ${appPromptsHtml()}
     ${r.location_set ? '' : `<a class="announce amber" href="#/settings" style="text-decoration:none;margin-bottom:16px"><span class="em float">📍</span>
       <div style="flex:1"><h3>Set your office location</h3><p>Staff can't check in until the office is on the map. It takes 30 seconds: search, paste a Google Maps link or tap the map.</p></div>
       <span class="btn sm">Set location</span></a>`}
     <div class="dash">
       <div class="stack-col">
-        <div class="card">
+        <div class="card m-hide">
           <div class="profile">
             <div class="photo" style="background:#2f3432;color:#d5d9e0">${logoMark(54)}</div>
             <div class="meta">
@@ -1996,7 +2057,7 @@ async function viewOwnerDashboard(params) {
               ${md.avg < 2.6 ? `<div class="notice pink mt">${icon('alert')}Energy is low today. A coffee run or quick check-in could help.</div>` : ''}`
               : empty('heart', 'Moods appear as people check in')}
           </div>
-          <div class="card" style="margin:0">
+          <div class="card ${celebrations.some((c) => c.inDays === 0) ? '' : 'm-hide'}" style="margin:0">
             <div class="card-head"><h2>Celebrations 🎈</h2><a class="btn sm light" href="#/wall">Wall</a></div>
             ${celebrationsHtml(celebrations)}
           </div>
@@ -2011,7 +2072,7 @@ async function viewOwnerDashboard(params) {
           <div id="board"></div>
         </div>
 
-        <div class="card">
+        <div class="card m-hide">
           <div class="card-head"><h2>Last 7 days</h2>
             <div class="legend"><span><i class="lime"></i>Early</span><span><i class="teal"></i>On time</span><span><i class="pink"></i>Late</span></div></div>
           <div class="bars">${o.trend
@@ -2525,84 +2586,93 @@ async function viewReport(params) {
 
 // ---------- Owner: settings ----------
 
+let reopenSections = null; // sections to keep open when the page re-renders after saving
 async function viewSettings() {
   const s = await api('/admin/settings');
   cachedRules = s;
   const mapLink = s.office_lat != null ? `https://www.google.com/maps?q=${s.office_lat},${s.office_lng}` : '';
   const timeField = (name, label, color) => `<label class="f"><span class="row" style="gap:6px"><span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${color})"></span>${label}</span><input type="time" name="${name}" value="${s[name]}" required></label>`;
+  const daysShort = s.work_days.slice().sort((x, y) => ((x + 1) % 7) - ((y + 1) % 7)).map((d) => DAYS[d].slice(0, 2)).join(' ');
+  // Collapsible sections with a one-line summary of the current values, so the page stays short.
+  const sec = (key, emoji, title, summary, body, open = false) => `
+    <details class="card set-sec" data-sec="${key}" ${(reopenSections ? reopenSections.includes(key) : open) ? 'open' : ''}>
+      <summary><span class="set-ico">${emoji}</span><span class="set-title"><strong>${title}</strong><span class="muted small" data-sum="${key}">${summary}</span></span>
+        <span class="set-chev">${icon('chevron')}</span></summary>
+      <div class="set-body">${body}</div>
+    </details>`;
   $('#app').innerHTML = `
-    ${pageHead('Settings', 'Rules apply to everyone immediately after saving.')}
-    <form id="settings" class="grid" style="gap:16px">
-      ${s.office_lat == null ? `<div class="notice amber">${icon('alert')}Office location isn't set. Staff can't check in until you set it below.</div>` : ''}
-      <div class="grid g2">
-        <div class="card" style="margin:0"><div class="card-head"><h2>Company</h2></div>
-          <div class="form-grid">
-            <label class="f full">Company name<input name="company_name" value="${esc(s.company_name)}" required></label>
-            <label class="f">Currency<input name="currency" value="${esc(s.currency)}" required></label>
-            <label class="f">Timezone<input name="timezone" value="${esc(s.timezone)}" required></label>
-          </div></div>
-        <div class="card" style="margin:0"><div class="card-head"><h2>Check-in rules</h2></div>
-          <div class="form-grid">
-            <label class="f">Max GPS uncertainty (m)<input type="number" name="max_accuracy_m" value="${s.max_accuracy_m}" min="5" required></label>
-          </div>
-          <p class="muted small mt">Check-ins with a GPS reading less precise than this are rejected. 100–200 m works for most phones; raise it if staff indoors get errors.</p>
-        </div>
-      </div>
-      <div class="card" style="margin:0" id="loc-card">
-        <div class="card-head"><h2>Office location 📍</h2>
-          <div class="actions"><span class="chip ${s.office_lat == null ? 'amber' : 'lime'}" id="loc-status">${s.office_lat == null ? 'Not set yet' : 'Set'}</span>
-          ${mapLink ? `<a class="btn sm light" href="${mapLink}" target="_blank" rel="noopener">Google Maps</a>` : ''}</div></div>
+    ${pageHead('Settings', 'Tap a section to edit it. Changes apply to everyone after saving.')}
+    <form id="settings" class="grid" style="gap:12px">
+      ${sec('loc', '📍', 'Office location',
+        s.office_lat == null ? '<span style="color:var(--red)">Not set: staff can\'t check in yet</span>' : `${Number(s.office_lat).toFixed(4)}, ${Number(s.office_lng).toFixed(4)} · ${s.radius_m} m radius`,
+        `<div class="row between wrap" style="margin-bottom:12px"><span class="chip ${s.office_lat == null ? 'amber' : 'lime'}" id="loc-status">${s.office_lat == null ? 'Not set yet' : 'Set'}</span>
+          ${mapLink ? `<a class="btn sm light" href="${mapLink}" target="_blank" rel="noopener">${icon('pin')}Open in Google Maps</a>` : ''}</div>
         <div class="loc-grid">
           <div class="map-wrap"><div id="map"><div class="empty" style="height:100%;justify-content:center">${icon('pin')}Loading map…</div></div>
             <p class="muted tiny" style="margin-top:6px">Tap the map or drag the pin to the office entrance. The circle is the allowed check-in area.</p></div>
           <div class="grid" style="gap:14px;align-content:start">
-            <div class="f"><span>1 · Search an address</span>
+            <div class="f"><span>Search an address</span>
               <div class="input-icon">${icon('search')}<input id="loc-search" placeholder="e.g. Bahr Network, Hurghada"></div>
               <div id="loc-results" class="list"></div></div>
-            <div class="f"><span>2 · Or paste a Google Maps link</span>
+            <div class="f"><span>Or paste a Google Maps link</span>
               <div class="row"><input id="loc-link" placeholder="https://maps.app.goo.gl/…"><button class="btn sm light" type="button" id="loc-link-go">Use</button></div></div>
-            <div class="f"><span>3 · Or use this device's GPS (stand in the office)</span>
-              <button class="btn light" type="button" id="use-loc">${icon('pin')}Use my current location</button></div>
-            <div class="form-grid">
+            <button class="btn light" type="button" id="use-loc">${icon('pin')}Use my current location</button>
+            <div class="form-grid two">
               <label class="f">Latitude<input name="office_lat" value="${s.office_lat ?? ''}" inputmode="decimal"></label>
               <label class="f">Longitude<input name="office_lng" value="${s.office_lng ?? ''}" inputmode="decimal"></label>
             </div>
             <label class="f">Allowed radius: <strong id="radius-label">${s.radius_m} m</strong>
               <input type="range" id="radius-range" min="20" max="1000" step="10" value="${Math.min(1000, s.radius_m)}" style="height:auto;padding:0;accent-color:var(--green)">
-              <input type="number" name="radius_m" value="${s.radius_m}" min="10" required></label>
-            <button class="btn xl block" type="button" id="save-loc">${icon('check')}Save office location</button>
-            <button class="btn light block" type="button" id="test-loc">${icon('activity')}Test: how far am I from the office?</button>
+              <input type="hidden" name="radius_m" value="${s.radius_m}"></label>
+            <div class="form-grid two">
+              <button class="btn block" type="button" id="save-loc">${icon('check')}Save location</button>
+              <button class="btn light block" type="button" id="test-loc">${icon('activity')}Test distance</button>
+            </div>
           </div>
-        </div>
-      </div>
-      <div class="card" style="margin:0"><div class="card-head"><h2>Check-in times</h2><span class="muted small">Preview updates as you type</span></div>
-        <div id="track-preview"></div>
-        <div class="form-grid mt">
+        </div>`, s.office_lat == null)}
+
+      ${sec('times', '⏰', 'Check-in times', `Early ${fmtTime(s.early_start)}–${fmtTime(s.early_end)} · Closes ${fmtTime(s.close)} · ${daysShort}`,
+        `<div id="track-preview"></div>
+        <div class="form-grid two mt">
           ${timeField('early_start', 'Early from', 'lime')}${timeField('early_end', 'Early until', 'lime')}
           ${timeField('late_after', 'Late after', 'pink')}${timeField('very_late_after', 'Very late after', 'pink')}
           ${timeField('close', 'Check-in closes', 'black')}
-          <label class="f">Red penalties when very late<input type="number" name="very_late_reds" value="${s.very_late_reds}" min="1" max="10" required></label>
+          <label class="f">Reds when very late<input type="number" name="very_late_reds" value="${s.very_late_reds}" min="1" max="10" required></label>
         </div>
-        <div class="f mt"><span>Work days <span class="muted tiny">(missing one without leave = automatic black)</span></span>
-          <div class="choice">${DAYS.map((d, i) => `<label><input type="checkbox" name="wd" value="${i}" ${s.work_days.includes(i) ? 'checked' : ''}>${d.slice(0, 3)}</label>`).join('')}</div></div>
-      </div>
-      <div class="card" style="margin:0"><div class="card-head"><h2>Team &amp; culture</h2><span class="muted small">Departments, kudos and recognition</span></div>
-        <div class="f"><span>Departments</span><div class="chips" id="depts">${s.departments.map((d) => `<span class="chip dept-chip" data-dept="${esc(d)}">${esc(d)} <button type="button" class="icon-btn xs ghost" style="width:20px;height:20px" aria-label="Remove">${icon('x')}</button></span>`).join('')}</div>
-          <div class="row mt" style="max-width:420px"><input id="new-dept" placeholder="Add a department, e.g. SEO"><button class="btn sm light" type="button" id="add-dept">${icon('plus')}Add</button></div></div>
-        <div class="form-grid mt">
-          <div class="full notice sky" style="justify-content:space-between;flex-wrap:wrap"><span class="row">${icon('lock')}<span><strong>Lock employees to their devices.</strong> Each employee can use one phone and one laptop (the first ones they sign in from), and a device can't be shared between employees. Owners can sign in from anywhere.</span></span>
-            <label class="toggle"><input type="checkbox" name="device_lock" ${s.device_lock ? 'checked' : ''}>On</label></div>
-          <label class="f">Kudos each person can send per day<input type="number" name="kudos_daily_limit" value="${s.kudos_daily_limit}" min="0" max="50" required></label>
-          <label class="f">Green points per kudos received <span class="muted tiny">(0 = recognition only)</span><input type="number" name="kudos_green" value="${s.kudos_green}" min="0" max="10" required></label>
-        </div></div>
-      <div class="card" style="margin:0"><div class="card-head"><h2>Money rules</h2></div>
-        <div class="grid g4">
-          <label class="tile pink" style="min-height:auto;gap:10px"><span class="t-title">Red penalty deduction</span><input type="number" name="red_value" value="${s.red_value}" min="0" required></label>
-          <label class="tile dark" style="min-height:auto;gap:10px"><span class="t-title">Black absence deduction</span><input type="number" name="black_value" value="${s.black_value}" min="0" required></label>
-          <label class="tile lime" style="min-height:auto;gap:10px"><span class="t-title">Green point reward value</span><input type="number" name="green_value" value="${s.green_value}" min="0" required></label>
-          <label class="tile teal" style="min-height:auto;gap:10px"><span class="t-title">Minimum points per reward</span><input type="number" name="min_reward_points" value="${s.min_reward_points}" min="1" required></label>
-        </div></div>
-      <div class="card row between" style="margin:0;position:sticky;bottom:12px;z-index:5">
+        <div class="f mt"><span>Work days <span class="muted tiny">(missing one without leave = black point)</span></span>
+          <div class="choice days">${DAYS.map((d, i) => `<label><input type="checkbox" name="wd" value="${i}" ${s.work_days.includes(i) ? 'checked' : ''}>${d.slice(0, 3)}</label>`).join('')}</div></div>
+        <label class="f mt">Max GPS uncertainty (m) <span class="muted tiny">Less precise readings are rejected. 100–200 m suits most phones.</span>
+          <input type="number" name="max_accuracy_m" value="${s.max_accuracy_m}" min="5" required></label>`)}
+
+      ${sec('money', '💰', 'Money rules', `Red ${money(s.red_value)} · Black ${money(s.black_value)} · Green ${money(s.green_value)}`,
+        `<div class="grid g2 money-grid">
+          <label class="tile pink"><span class="t-title">🔴 Red penalty</span><input type="number" name="red_value" value="${s.red_value}" min="0" required></label>
+          <label class="tile dark"><span class="t-title">⚫ Black absence</span><input type="number" name="black_value" value="${s.black_value}" min="0" required></label>
+          <label class="tile lime"><span class="t-title">🟢 Green point value</span><input type="number" name="green_value" value="${s.green_value}" min="0" required></label>
+          <label class="tile teal"><span class="t-title">🎁 Min. points per reward</span><input type="number" name="min_reward_points" value="${s.min_reward_points}" min="1" required></label>
+        </div>`)}
+
+      ${sec('team', '🤝', 'Team & culture', `${s.departments.length} departments · ${s.kudos_daily_limit} kudos/day`,
+        `<div class="f"><span>Departments</span><div class="chips" id="depts">${s.departments.map((d) => `<span class="chip dept-chip" data-dept="${esc(d)}">${esc(d)} <button type="button" class="icon-btn xs ghost" style="width:20px;height:20px" aria-label="Remove">${icon('x')}</button></span>`).join('')}</div>
+          <div class="row mt"><input id="new-dept" placeholder="Add a department, e.g. SEO"><button class="btn sm light" type="button" id="add-dept">${icon('plus')}Add</button></div></div>
+        <div class="form-grid two mt">
+          <label class="f">Kudos per person per day<input type="number" name="kudos_daily_limit" value="${s.kudos_daily_limit}" min="0" max="50" required></label>
+          <label class="f">Green points per kudos <span class="muted tiny">(0 = none)</span><input type="number" name="kudos_green" value="${s.kudos_green}" min="0" max="10" required></label>
+        </div>`)}
+
+      ${sec('security', '🔒', 'Security', s.device_lock ? 'Device lock on · 1 phone + 1 laptop per employee' : 'Device lock off',
+        `<div class="row between" style="gap:14px;align-items:flex-start">
+          <div><strong>Lock employees to their devices</strong><p class="muted small" style="margin-top:4px">Each employee can use one phone and one laptop (the first ones they sign in from), and a device can't be shared between employees. Owners can sign in from anywhere.</p></div>
+          <label class="toggle"><input type="checkbox" name="device_lock" ${s.device_lock ? 'checked' : ''}></label></div>`)}
+
+      ${sec('company', '🏢', 'Company', `${esc(s.company_name)} · ${esc(s.currency)} · ${esc(s.timezone)}`,
+        `<div class="form-grid">
+          <label class="f full">Company name<input name="company_name" value="${esc(s.company_name)}" required></label>
+          <label class="f">Currency<input name="currency" value="${esc(s.currency)}" required></label>
+          <label class="f">Timezone<input name="timezone" value="${esc(s.timezone)}" required></label>
+        </div>`)}
+
+      <div class="card row between save-bar">
         <span class="muted small" id="dirty">All changes saved</span>
         <button class="btn" type="submit">${icon('check')}Save settings</button>
       </div>
@@ -2615,15 +2685,15 @@ async function viewSettings() {
     } catch { /* partial input */ }
   };
   preview();
-  form.oninput = () => { preview(); $('#dirty').textContent = 'Unsaved changes'; };
-  const bindDepts = () => $$('#depts [data-dept] button').forEach((b) => (b.onclick = () => { b.parentElement.remove(); $('#dirty').textContent = 'Unsaved changes'; }));
+  form.oninput = () => { preview(); ($('#dirty').textContent = 'Unsaved changes', $('.save-bar').classList.add('show')); };
+  const bindDepts = () => $$('#depts [data-dept] button').forEach((b) => (b.onclick = () => { b.parentElement.remove(); ($('#dirty').textContent = 'Unsaved changes', $('.save-bar').classList.add('show')); }));
   bindDepts();
   const addDept = () => {
     const v = $('#new-dept').value.trim();
     if (!v || $$('#depts [data-dept]').some((c) => c.dataset.dept.toLowerCase() === v.toLowerCase())) return;
     $('#depts').insertAdjacentHTML('beforeend', `<span class="chip dept-chip pop" data-dept="${esc(v)}">${esc(v)} <button type="button" class="icon-btn xs ghost" style="width:20px;height:20px" aria-label="Remove">${icon('x')}</button></span>`);
     $('#new-dept').value = '';
-    $('#dirty').textContent = 'Unsaved changes';
+    ($('#dirty').textContent = 'Unsaved changes', $('.save-bar').classList.add('show'));
     bindDepts();
   };
   $('#add-dept').onclick = addDept;
@@ -2633,7 +2703,7 @@ async function viewSettings() {
   let map;
   let pin;
   let ring;
-  const markDirty = () => ($('#dirty').textContent = 'Unsaved changes');
+  const markDirty = () => (($('#dirty').textContent = 'Unsaved changes', $('.save-bar').classList.add('show')));
   const setLoc = (lat, lng, { zoom = false, from = '' } = {}) => {
     form.office_lat.value = Number(lat).toFixed(6);
     form.office_lng.value = Number(lng).toFixed(6);
@@ -2671,6 +2741,9 @@ async function viewSettings() {
     .catch((err) => ($('#map').innerHTML = `<div class="empty" style="height:100%;justify-content:center">${esc(err.message)}</div>`));
 
   $('#radius-range').oninput = (e) => { setRadius(e.target.value); markDirty(); };
+  $('[data-sec="loc"]').addEventListener('toggle', (e) => {
+    if (e.target.open && map) setTimeout(() => map.invalidateSize(), 50);
+  });
   form.radius_m.addEventListener('input', (e) => setRadius(e.target.value));
   ['office_lat', 'office_lng'].forEach((k) => form[k].addEventListener('change', () => {
     const lat = Number(form.office_lat.value);
@@ -2758,7 +2831,13 @@ async function viewSettings() {
     return act(btn, async () => {
       const saved = await api('/admin/settings', { method: 'PUT', body });
       company = saved.company_name;
-      $('#dirty').textContent = 'All changes saved';
+      $('#dirty').textContent = 'All changes saved ✓';
+      // Re-render so the section summaries show the new values, keeping open sections open.
+      reopenSections = $$('.set-sec[open]').map((d) => d.dataset.sec);
+      setTimeout(async () => {
+        if (parseHash().path === 'settings') await route();
+        reopenSections = null;
+      }, 700);
       $('#loc-status').className = `chip ${saved.office_lat == null ? 'amber' : 'lime'}`;
       $('#loc-status').textContent = saved.office_lat == null ? 'Not set yet' : 'Saved ✓';
       if (saved.office_lat != null) confetti({ count: 60 });
