@@ -901,3 +901,35 @@ body::after { background: radial-gradient(circle, var(--glow-2), transparent 65%
 }
 body::before { top: -260px; left: -220px; background: radial-gradient(circle, var(--glow-1), transparent 70%); }
 body::after { bottom: -300px; right: -240px; background: radial-gradient(circle, var(--glow-2), transparent 70%); }
+
+/* ============ Payroll, holidays, schedules ============ */
+.form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 640px) { .form-grid.three { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.list-item.past { opacity: .6; }
+.dept-sch { border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; background: var(--surface-2, transparent); }
+.dept-sch > summary { list-style: none; display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.dept-sch > summary::-webkit-details-marker { display: none; }
+.dept-sch > summary .grow { flex: 1; min-width: 0; }
+.dept-sch .choice.days label { padding: 6px 10px; }
+
+.slip-wrap { max-width: 640px; margin: 0 auto; }
+.slip { padding: 24px; }
+.slip-head { display: flex; align-items: center; gap: 12px; padding-bottom: 14px; border-bottom: 1px dashed var(--line-2, var(--line)); }
+.slip-head .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.slip-head strong { font-size: 1.05rem; }
+.slip-meta { margin-top: 12px; }
+.slip-body { margin-top: 14px; }
+.slip-line { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.slip-line span { display: flex; flex-direction: column; }
+.slip-line small { color: var(--muted); font-size: .74rem; }
+.slip-line.plus b { color: var(--green); }
+.slip-line.minus b { color: var(--red); }
+.slip-line.total { border-bottom: 0; margin-top: 6px; padding: 14px 16px; border-radius: 14px; background: var(--lime); color: var(--lime-ink); font-size: 1.15rem; }
+.slip-line.total b { font-size: 1.4rem; }
+.slip-foot { margin-top: 16px; }
+@media print {
+  .page-head .row, .announce, .notice.no-print { display: none !important; }
+  .slip-wrap { max-width: none; }
+  .slip-line.total { background: #f1f5f4 !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .table-wrap { overflow: visible !important; }
+}

@@ -304,6 +304,154 @@ test('push: key, subscribe, triggers never break requests, daily cron', async ()
   assert.equal(typeof daily.body.reminded, 'number');
 });
 
+test('official holidays: no absence, preset, dashboard', async () => {
+  assert.equal((await emp('/admin/holidays', { method: 'POST', body: { date: '2026-02-03', name: 'Test Day' } })).status, 403);
+  assert.equal((await owner('/admin/holidays', { method: 'POST', body: { date: '2026-02-03', name: 'Test Day' } })).status, 201);
+  clock = cairo('2026-02-03', '13:00');
+  await runAbsenceJob(db, await getSettings(db), clock);
+  const absent = (d) => db.get(`SELECT 1 FROM points WHERE user_id = ? AND work_date = ? AND source = 'absent'`, [empId, d]);
+  assert.ok(await absent('2026-02-02'));
+  assert.ok(!(await absent('2026-02-03')));
+  const d = (await emp('/me/dashboard')).body;
+  assert.equal(d.work_day, false);
+  assert.equal(d.holiday, 'Test Day');
+  assert.equal((await owner('/admin/overview')).body.rows.find((r) => r.id === empId).status, 'holiday');
+  assert.equal((await owner('/admin/holidays/preset', { method: 'POST', body: { year: 2026 } })).body.added, 7);
+  const list = (await emp('/holidays?year=2026')).body;
+  assert.ok(list.some((h) => h.date === '2026-01-25'));
+  const extra = list.find((h) => h.name === 'Test Day');
+  // Removing a holiday is allowed; the absence job may then record that day again.
+  assert.equal((await owner(`/admin/holidays/${extra.id}/delete`, { method: 'POST', body: {} })).status, 200);
+  await owner('/admin/holidays', { method: 'POST', body: { date: '2026-02-03', name: 'Test Day' } });
+});
+
+test('leave types and yearly balances', async () => {
+  assert.equal((await owner(`/admin/users/${empId}`, { method: 'PATCH', body: { annual_leave: 3 } })).status, 200);
+  const b = (await emp('/me/leave-balance?year=2026')).body.balance;
+  // Jan 7 became a holiday (Coptic Christmas), so the approved day off no longer counts; Feb 1 is pending.
+  assert.deepEqual(b.annual, { used: 0, pending: 1, allowance: 3, left: 2 });
+  assert.equal(b.sick.allowance, 7);
+  const tooMuch = await emp('/me/leaves', { method: 'POST', body: { type: 'annual', from_date: '2026-02-08', to_date: '2026-02-11' } });
+  assert.equal(tooMuch.status, 400);
+  assert.match(tooMuch.body.error, /2 left/);
+  assert.equal((await emp('/me/leaves', { method: 'POST', body: { type: 'sick', from_date: '2026-02-08', to_date: '2026-02-11' } })).status, 201);
+  assert.equal((await emp('/me/leaves', { method: 'POST', body: { type: 'holiday', from_date: '2026-02-08', to_date: '2026-02-08' } })).status, 400);
+  assert.equal((await emp('/me/leaves', { method: 'POST', body: { from_date: '2026-02-06', to_date: '2026-02-06' } })).status, 400); // Friday off
+  const unpaid = await emp('/me/leaves', { method: 'POST', body: { type: 'unpaid', from_date: '2026-03-15', to_date: '2026-03-15' } });
+  assert.equal(unpaid.status, 201);
+  await owner(`/admin/leaves/${unpaid.body.id}/decision`, { method: 'POST', body: { decision: 'approve' } });
+  assert.equal((await emp('/me/leave-balance?year=2026')).body.balance.sick.left, 3);
+});
+
+test('attendance corrections: missing check-in and missing check-out', async () => {
+  clock = cairo('2026-02-04', '13:00');
+  await runAbsenceJob(db, await getSettings(db), clock);
+  const body = { work_date: '2026-02-04', check_in_time: '09:30', check_out_time: '18:30', reason: 'Forgot to check in' };
+  assert.equal((await emp('/me/corrections', { method: 'POST', body: { ...body, work_date: '2026-02-05' } })).status, 400); // future
+  const c = await emp('/me/corrections', { method: 'POST', body });
+  assert.equal(c.status, 201);
+  assert.equal((await emp('/me/corrections', { method: 'POST', body })).status, 409);
+  assert.equal((await owner(`/admin/corrections/${c.body.id}/decision`, { method: 'POST', body: { decision: 'approve' } })).status, 200);
+  const att = await db.get('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?', [empId, '2026-02-04']);
+  assert.equal(att.status, 'on_time');
+  assert.equal(att.check_out_time, '18:30');
+  assert.ok(!(await db.get(`SELECT 1 FROM points WHERE user_id = ? AND work_date = '2026-02-04' AND source = 'absent'`, [empId])));
+  // Jan 13: checked in but never checked out.
+  assert.equal((await emp('/me/corrections', { method: 'POST', body: { work_date: '2026-01-13', check_in_time: '09:00', reason: 'x' } })).status, 400);
+  const out = await emp('/me/corrections', { method: 'POST', body: { work_date: '2026-01-13', check_out_time: '17:00', reason: 'Left in a hurry' } });
+  assert.equal(out.status, 201);
+  await owner(`/admin/corrections/${out.body.id}/decision`, { method: 'POST', body: { decision: 'approve' } });
+  assert.equal((await db.get(`SELECT check_out_time FROM attendance WHERE user_id = ? AND work_date = '2026-01-13'`, [empId])).check_out_time, '17:00');
+  assert.equal((await emp('/me/corrections')).body.length, 2);
+});
+
+const lead = client(UA.laptop);
+const dina = client();
+let dinaId;
+
+test('team lead: department-scoped approvals and team board, no money or settings', async () => {
+  const l = await owner('/admin/users', { method: 'POST', body: { name: 'Lina Lead', username: 'lina', password: 'pass123', role: 'lead', department: 'Design' } });
+  const d = await owner('/admin/users', { method: 'POST', body: { name: 'Dina', username: 'dina', password: 'pass123', department: 'Design', start_date: '2026-02-01' } });
+  dinaId = d.body.id;
+  assert.equal((await lead('/login', { method: 'POST', body: { username: 'lina', password: 'pass123' } })).status, 200);
+  assert.equal((await dina('/login', { method: 'POST', body: { username: 'dina', password: 'pass123' } })).status, 200);
+  assert.equal((await lead('/me')).body.user.role, 'lead');
+  assert.equal((await lead('/me/dashboard')).status, 200); // leads check in like everyone else
+  const board = (await lead('/admin/overview')).body;
+  assert.deepEqual(board.rows.map((r) => r.name), ['Dina']);
+  assert.equal(board.scope, 'Design');
+  const leave = await dina('/me/leaves', { method: 'POST', body: { from_date: '2026-02-10', to_date: '2026-02-10' } });
+  const leaves = (await lead('/admin/leaves')).body;
+  assert.ok(leaves.length && leaves.every((x) => x.user_name === 'Dina'));
+  const omarLeave = (await owner('/admin/leaves?status=pending')).body.find((x) => x.user_id === empId);
+  assert.equal((await lead(`/admin/leaves/${omarLeave.id}/decision`, { method: 'POST', body: { decision: 'approve' } })).status, 404);
+  assert.equal((await lead(`/admin/leaves/${leave.body.id}/decision`, { method: 'POST', body: { decision: 'approve' } })).status, 200);
+  assert.equal((await lead(`/admin/users/${empId}/history`)).status, 404);
+  assert.equal((await lead(`/admin/users/${dinaId}/history`)).status, 200);
+  for (const path of ['/admin/payroll', '/admin/settings', '/admin/users', '/admin/audit', '/admin/export.xlsx', '/admin/feed']) {
+    assert.equal((await lead(path)).status, 403, path);
+  }
+  assert.equal((await lead('/admin/points', { method: 'POST', body: { user_id: dinaId, kind: 'green', delta: 1, reason: 'x' } })).status, 403);
+  assert.ok(l.body.id);
+});
+
+test('department schedules, hours, overtime and payroll', async () => {
+  const s = (await owner('/admin/settings')).body;
+  const design = { early_start: '09:00', early_end: '10:00', late_after: '11:00', very_late_after: '12:00', close: '13:00', work_days: [0, 1, 2, 3, 4], daily_hours: 8 };
+  const bad = await owner('/admin/settings', { method: 'PUT', body: { ...s, dept_schedules: { Design: { ...design, close: '08:00' } } } });
+  assert.equal(bad.status, 400);
+  assert.equal((await owner('/admin/settings', { method: 'PUT', body: { ...s, dept_schedules: { Design: design } } })).status, 200);
+  assert.equal((await owner(`/admin/users/${dinaId}`, { method: 'PATCH', body: { salary: 22000 } })).status, 200);
+  clock = cairo('2026-03-01', '10:30'); // Sunday: late for the company, on time for Design
+  const r = await dina('/me/check-in', { method: 'POST', body: NEAR });
+  assert.equal(r.body.attendance.status, 'on_time');
+  clock = cairo('2026-03-01', '20:30');
+  await dina('/me/check-out', { method: 'POST', body: {} });
+  // Saturday is a day off for Design only.
+  clock = cairo('2026-03-07', '23:00');
+  await runAbsenceJob(db, await getSettings(db), clock);
+  const absent = (u, d) => db.get(`SELECT 1 FROM points WHERE user_id = ? AND work_date = ? AND source = 'absent'`, [u, d]);
+  assert.ok(!(await absent(dinaId, '2026-03-07')));
+  assert.ok(await absent(empId, '2026-03-07'));
+  assert.ok(await absent(dinaId, '2026-03-02'));
+
+  const slip = (await dina('/me/payslip?month=2026-03')).body.row;
+  assert.equal(slip.work_days, 23); // Sun–Thu in March 2026
+  assert.equal(slip.hours_worked, 10);
+  assert.equal(slip.overtime_hours, 2);
+  const dayRate = 22000 / 23;
+  assert.equal(slip.overtime_pay, Math.round(2 * (dayRate / 8) * 1.5 * 100) / 100);
+  assert.equal(slip.net_pay, Math.round((22000 - slip.total_deduction + slip.overtime_pay) * 100) / 100);
+  assert.equal((await dina('/me/payslip?month=2026-09')).status, 400);
+  const pay = (await owner('/admin/payroll?month=2026-03')).body;
+  const omar = pay.rows.find((x) => x.user_id === empId);
+  assert.equal(omar.unpaid_days, 1);
+  assert.equal(omar.salary, 0);
+  assert.match((await owner('/admin/payroll.csv?month=2026-03')).body, /Net pay/);
+});
+
+test('weekly summary, activity log and Excel backup', async () => {
+  const w = await emp('/cron/weekly');
+  assert.equal(w.status, 200);
+  assert.equal(typeof w.body.summary.rate, 'number');
+  assert.equal((await owner('/admin/weekly-summary', { method: 'POST', body: {} })).status, 200);
+  const log = (await owner('/admin/audit')).body;
+  const actions = new Set(log.map((x) => x.action));
+  for (const a of ['user.create', 'user.update', 'holiday.add', 'holiday.preset', 'correction.approve', 'leave.approve', 'settings.update', 'payroll.export']) {
+    assert.ok(actions.has(a), a);
+  }
+  assert.ok(log.some((x) => x.action === 'leave.approve' && x.actor_name === 'Lina Lead' && x.target_name === 'Dina'));
+  const res = await fetch(`${base}/api/admin/export.xlsx`, { headers: { Cookie: [...owner.jar].map(([k, v]) => `${k}=${v}`).join('; '), 'User-Agent': UA.phone } });
+  assert.equal(res.status, 200);
+  const buf = Buffer.from(await res.arrayBuffer());
+  assert.equal(buf.subarray(0, 2).toString(), 'PK');
+  const ExcelJS = require('exceljs');
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  assert.ok(wb.getWorksheet('Attendance').rowCount > 5);
+  assert.ok(!wb.getWorksheet('Staff').getRow(1).values.includes('password_hash'));
+});
+
 test('rejects non-JSON writes', async () => {
   const res = await fetch(`${base}/api/login`, { method: 'POST', body: 'username=a&password=b', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
   assert.equal(res.status, 415);

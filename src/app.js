@@ -14,6 +14,11 @@ const {
   hasApprovedLeave,
   runAbsenceJob,
   monthReport,
+  scheduleFor,
+  workedMinutes,
+  leaveUsage,
+  LEAVE_TYPES,
+  payroll,
 } = require('./logic');
 const auth = require('./auth');
 const { registerCulture } = require('./culture');
@@ -21,6 +26,18 @@ const { resolveMapLink } = require('./maplink');
 const push = require('./push');
 
 const PAYOUT_METHODS = ['instapay', 'vodafone_cash', 'cash'];
+const ROLES = ['owner', 'lead', 'employee'];
+const LEAVE_LABEL = { annual: 'Annual leave', sick: 'Sick leave', unpaid: 'Unpaid leave' };
+// Fixed-date official holidays in Egypt (Islamic holidays move every year, so they're added by hand).
+const EGYPT_HOLIDAYS = [
+  ['01-07', 'Coptic Christmas'],
+  ['01-25', 'Revolution Day (25 January)'],
+  ['04-25', 'Sinai Liberation Day'],
+  ['05-01', 'Labour Day'],
+  ['06-30', '30 June Revolution'],
+  ['07-23', 'Revolution Day (23 July)'],
+  ['10-06', 'Armed Forces Day'],
+];
 const ABSENCE_JOB_INTERVAL_MS = 5 * 60 * 1000;
 
 function fail(message, status = 400, code = undefined) {
@@ -28,6 +45,18 @@ function fail(message, status = 400, code = undefined) {
 }
 
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+// Optional numbers from forms: '' / null clears the value.
+function optNum(v, min, max, label) {
+  if (v === '' || v === null || v === undefined) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < min || n > max) fail(`${label} must be between ${min} and ${max}`);
+  return n;
+}
+const optInt = (v, label) => {
+  const n = optNum(v, 0, 365, label);
+  if (n != null && !Number.isInteger(n)) fail(`${label} must be a whole number of days`);
+  return n;
+};
 const posInt = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 && Number(v) < 2 ** 31 ? Number(v) : null);
 
 function createApp(db, { now = () => new Date() } = {}) {
@@ -61,7 +90,7 @@ function createApp(db, { now = () => new Date() } = {}) {
     const user = await auth.sessionUser(db, req);
     if (!user) return res.status(401).json({ error: 'Please log in first' });
     // Sessions from before the device lock existed: sign in once more so this device gets bound.
-    if (user.role === 'employee' && !user.session_device && (await settings()).device_lock) {
+    if (user.role !== 'owner' && !user.session_device && (await settings()).device_lock) {
       await db.run('DELETE FROM sessions WHERE token = ?', [user.token]);
       return res.status(401).json({ error: 'Please log in again to register this device' });
     }
@@ -70,16 +99,51 @@ function createApp(db, { now = () => new Date() } = {}) {
     next();
   }
 
-  const requireRole = (role, message) => [
+  const requireRole = (roles, message) => [
     requireUser,
-    (req, res, next) => (req.user.role === role ? next() : res.status(403).json({ error: message })),
+    (req, res, next) => (roles.includes(req.user.role) ? next() : res.status(403).json({ error: message })),
   ];
-  const requireOwner = requireRole('owner', 'Owner access only');
-  const requireEmployee = requireRole('employee', 'Employee access only');
+  const requireOwner = requireRole(['owner'], 'Owner access only');
+  // Team leads are employees too: they check in, collect points and request leave like everyone else.
+  const requireEmployee = requireRole(['employee', 'lead'], 'Employee access only');
+  // Owners manage everyone; leads manage the employees of their own department.
+  const requireManager = requireRole(['owner', 'lead'], 'Manager access only');
+
+  // SQL condition limiting rows (joined as `alias`) to the people this manager is responsible for.
+  const teamScope = (user, alias = 'u') =>
+    user.role === 'owner'
+      ? { sql: 'TRUE', params: [] }
+      : { sql: `(${alias}.department = ? AND ${alias}.role = 'employee')`, params: [user.department || ''] };
+
+  async function assertManages(user, targetId) {
+    const { sql, params } = teamScope(user);
+    const row = await db.get(`SELECT u.id FROM users u WHERE u.id = ? AND ${sql}`, [targetId, ...params]);
+    if (!row) fail('Not found', 404);
+  }
+
+  // Owners and the department's lead hear about new requests.
+  async function notifyManagers(employee, payload) {
+    const rows = await db.all(
+      `SELECT id FROM users WHERE active = 1 AND id <> ?
+         AND (role = 'owner' OR (role = 'lead' AND ? = 'employee' AND department IS NOT NULL AND department = ?))`,
+      [employee.id, employee.role, employee.department || ''],
+    );
+    return push.notifyUsers(db, rows.map((r) => r.id), payload);
+  }
+
+  // Activity log of owner / lead actions. Never breaks the action itself.
+  async function audit(actor, action, detail = null, targetUserId = null) {
+    try {
+      await db.run('INSERT INTO audit_log (actor_id, action, target_user_id, detail) VALUES (?, ?, ?, ?)', [
+        actor?.id || null, action, targetUserId, detail == null ? null : String(detail).slice(0, 500),
+      ]);
+    } catch (err) {
+      console.error('[audit] failed', err.message);
+    }
+  }
 
   // Locks the user's row so concurrent balance checks (redeem, rewards, adjustments) can't double-spend.
-  const lockUser = (t, userId, role = 'employee') =>
-    t.get(`SELECT id FROM users WHERE id = ? AND role = ? FOR UPDATE`, [userId, role]);
+  const lockUser = (t, userId) => t.get(`SELECT id FROM users WHERE id = ? AND role <> 'owner' FOR UPDATE`, [userId]);
 
   // ---------- Public ----------
 
@@ -134,7 +198,7 @@ function createApp(db, { now = () => new Date() } = {}) {
     const label = auth.deviceLabel(req.headers['user-agent']);
     const s = await settings();
     // Owners/managers can sign in from anywhere; only employees are device-locked.
-    if (user.role === 'employee' && s.device_lock) await checkDevice(user, device, label, auth.deviceKind(req));
+    if (user.role !== 'owner' && s.device_lock) await checkDevice(user, device, label, auth.deviceKind(req));
     const session = await auth.createSession(db, user.id, device);
     auth.setSessionCookie(res, session.token, session.expires);
     res.json({ ok: true });
@@ -211,22 +275,42 @@ function createApp(db, { now = () => new Date() } = {}) {
     const s = await settings();
     const t = localToday(s);
     const added = await runAbsenceJob(db, s, now());
+    const due = await db.all(
+      `SELECT u.id, u.department FROM users u
+       WHERE u.role <> 'owner' AND u.active = 1 AND u.start_date <= ?
+         AND NOT EXISTS (SELECT 1 FROM attendance a WHERE a.user_id = u.id AND a.work_date = ?)
+         AND NOT EXISTS (SELECT 1 FROM leave_requests l WHERE l.user_id = u.id AND l.status = 'approved' AND ? BETWEEN l.from_date AND l.to_date)`,
+      [t.date, t.date, t.date],
+    );
+    // Group by schedule so each department is reminded of its own early window.
+    const groups = new Map();
+    for (const u of due) {
+      const us = scheduleFor(s, u.department);
+      if (!isWorkDay(t.date, us)) continue;
+      const key = `${us.early_start}-${us.early_end}`;
+      if (!groups.has(key)) groups.set(key, { us, ids: [] });
+      groups.get(key).ids.push(u.id);
+    }
     let reminded = 0;
-    if (isWorkDay(t.date, s)) {
-      const due = await db.all(
-        `SELECT u.id FROM users u
-         WHERE u.role = 'employee' AND u.active = 1 AND u.start_date <= ?
-           AND NOT EXISTS (SELECT 1 FROM attendance a WHERE a.user_id = u.id AND a.work_date = ?)
-           AND NOT EXISTS (SELECT 1 FROM leave_requests l WHERE l.user_id = u.id AND l.status = 'approved' AND ? BETWEEN l.from_date AND l.to_date)`,
-        [t.date, t.date, t.date],
-      );
-      reminded = await push.notifyUsers(db, due.map((u) => u.id), {
+    for (const { us, ids } of groups.values()) {
+      reminded += await push.notifyUsers(db, ids, {
         title: 'Good morning ☀️',
-        body: `Check in between ${s.early_start} and ${s.early_end} to earn a green point. Have a great day!`,
+        body: `Check in between ${us.early_start} and ${us.early_end} to earn a green point. Have a great day!`,
         url: '/#/', tag: `remind-${t.date}`,
       });
     }
     res.json({ added, reminded });
+  });
+
+  // Weekly (Vercel Cron, Thursday afternoon): a summary of the week for the owners.
+  app.get('/api/cron/weekly', async (req, res) => {
+    if (!cronAllowed(req)) return res.status(401).json({ error: 'Unauthorized' });
+    const s = await settings();
+    if (!s.weekly_summary) return res.json({ sent: 0, disabled: true });
+    const owners = await db.all(`SELECT id FROM users WHERE role = 'owner' AND active = 1`);
+    const summary = await weeklySummary(s);
+    const sent = await push.notifyUsers(db, owners.map((o) => o.id), summary.push);
+    res.json({ sent, summary: summary.data });
   });
 
   // ----- Push notifications -----
@@ -256,8 +340,9 @@ function createApp(db, { now = () => new Date() } = {}) {
   // ---------- Employee ----------
 
   app.get('/api/me/dashboard', requireEmployee, async (req, res) => {
-    const s = await settings();
-    await maybeRunAbsences(s);
+    const company = await settings();
+    await maybeRunAbsences(company);
+    const s = scheduleFor(company, req.user.department);
     const t = localToday(s);
     const [attendance, b, onLeave] = await Promise.all([
       db.get('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?', [req.user.id, t.date]),
@@ -269,6 +354,7 @@ function createApp(db, { now = () => new Date() } = {}) {
     res.json({
       now: t,
       work_day: isWorkDay(t.date, s),
+      holiday: (await db.get('SELECT name FROM holidays WHERE date = ?', [t.date]))?.name || null,
       on_leave: onLeave,
       ...(await attendanceStats(req.user, s, t)),
       check_in_window:
@@ -287,7 +373,7 @@ function createApp(db, { now = () => new Date() } = {}) {
   });
 
   app.post('/api/me/check-in', requireEmployee, async (req, res) => {
-    const s = await settings();
+    const s = scheduleFor(await settings(), req.user.department);
     const t = localToday(s);
     const lat = Number(req.body.lat);
     const lng = Number(req.body.lng);
@@ -370,21 +456,101 @@ function createApp(db, { now = () => new Date() } = {}) {
     res.json(await db.all('SELECT * FROM leave_requests WHERE user_id = ? ORDER BY id DESC LIMIT 100', [req.user.id]));
   });
 
+  app.get('/api/me/leave-balance', requireEmployee, async (req, res) => {
+    const s = await settings();
+    const year = /^\d{4}$/.test(req.query.year || '') ? req.query.year : localToday(s).date.slice(0, 4);
+    const user = await db.get('SELECT id, department, annual_leave, sick_leave FROM users WHERE id = ?', [req.user.id]);
+    res.json({ year, balance: await leaveUsage(db, s, user, year) });
+  });
+
   app.post('/api/me/leaves', requireEmployee, async (req, res) => {
     const { from_date: from, to_date: to } = req.body;
+    const type = req.body.type == null ? 'annual' : req.body.type;
+    if (!LEAVE_TYPES.includes(type)) fail('Choose a leave type');
     if (!isDate(from) || !isDate(to)) fail('Choose start and end dates');
     if (to < from) fail('End date must be on or after start date');
     if (eachDate(from, to).length > 60) fail('Leave can be at most 60 days');
-    const row = await db.get(
-      'INSERT INTO leave_requests (user_id, from_date, to_date, reason) VALUES (?, ?, ?, ?) RETURNING *',
-      [req.user.id, from, to, str(req.body.reason, 500) || null],
-    );
-    await push.notifyRole(db, 'owner', {
-      title: `🗓️ Leave request from ${req.user.name}`,
+    if (from.slice(0, 4) !== to.slice(0, 4)) fail('Split leave that crosses into a new year into two requests');
+    const s = await settings();
+    const row = await db.tx(async (tx) => {
+      await tx.get('SELECT id FROM users WHERE id = ? FOR UPDATE', [req.user.id]);
+      const user = await tx.get('SELECT id, department, annual_leave, sick_leave FROM users WHERE id = ?', [req.user.id]);
+      const us = scheduleFor(s, user.department);
+      const days = eachDate(from, to).filter((d) => isWorkDay(d, us)).length;
+      if (!days) fail('Those dates are all days off or holidays. No leave is needed.');
+      const bal = (await leaveUsage(tx, s, user, from.slice(0, 4)))[type];
+      if (bal.left != null && days > bal.left) {
+        fail(`Not enough ${LEAVE_LABEL[type].toLowerCase()}: this request needs ${days} work day${days === 1 ? '' : 's'}, you have ${bal.left} left this year.`);
+      }
+      return tx.get(
+        'INSERT INTO leave_requests (user_id, from_date, to_date, reason, type) VALUES (?, ?, ?, ?, ?) RETURNING *',
+        [req.user.id, from, to, str(req.body.reason, 500) || null, type],
+      );
+    });
+    await notifyManagers(req.user, {
+      title: `🗓️ ${LEAVE_LABEL[type]} request from ${req.user.name}`,
       body: `${from === to ? from : `${from} → ${to}`}${row.reason ? ` · ${row.reason}` : ''}`,
       url: '/#/leaves', tag: `leave-${row.id}`,
     });
     res.status(201).json(row);
+  });
+
+  // ----- Attendance corrections ("I forgot to check in / out") -----
+
+  app.get('/api/me/corrections', requireEmployee, async (req, res) => {
+    res.json(await db.all('SELECT * FROM attendance_corrections WHERE user_id = ? ORDER BY id DESC LIMIT 100', [req.user.id]));
+  });
+
+  app.post('/api/me/corrections', requireEmployee, async (req, res) => {
+    const t = localToday(await settings());
+    const date = req.body.work_date;
+    const inTime = req.body.check_in_time || null;
+    const outTime = req.body.check_out_time || null;
+    const reason = str(req.body.reason, 500);
+    if (!isDate(date)) fail('Choose the day');
+    if (date > t.date) fail('You can only correct days that already happened');
+    if (date < addDays(t.date, -30)) fail('Corrections are only possible for the last 30 days');
+    if (inTime && !isTime(inTime)) fail('Invalid check-in time');
+    if (outTime && !isTime(outTime)) fail('Invalid check-out time');
+    if (!inTime && !outTime) fail('Enter the check-in or check-out time');
+    if (inTime && outTime && outTime <= inTime) fail('Check-out must be after check-in');
+    if (!reason) fail('Tell your manager what happened');
+    const existing = await db.get('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?', [req.user.id, date]);
+    if (existing && inTime) fail('You already checked in that day. Only a missing check-out can be corrected.');
+    if (existing && existing.check_out_time) fail('That day already has a check-in and a check-out');
+    if (!existing && !inTime) fail('You did not check in that day. Enter your check-in time.');
+    if (existing && outTime <= existing.check_in_time) fail(`Check-out must be after your check-in (${existing.check_in_time})`);
+    if (await db.get(`SELECT 1 FROM attendance_corrections WHERE user_id = ? AND work_date = ? AND status = 'pending'`, [req.user.id, date])) {
+      fail('You already have a pending correction for that day', 409);
+    }
+    const row = await db.get(
+      `INSERT INTO attendance_corrections (user_id, work_date, check_in_time, check_out_time, reason) VALUES (?, ?, ?, ?, ?) RETURNING *`,
+      [req.user.id, date, inTime, outTime, reason],
+    );
+    await notifyManagers(req.user, {
+      title: `🛠️ Attendance fix from ${req.user.name}`,
+      body: `${date}: ${[inTime && `in ${inTime}`, outTime && `out ${outTime}`].filter(Boolean).join(', ')} · ${reason}`,
+      url: '/#/corrections', tag: `correction-${row.id}`,
+    });
+    res.status(201).json(row);
+  });
+
+  app.post('/api/me/corrections/:id/cancel', requireEmployee, async (req, res) => {
+    const info = await db.run(
+      `UPDATE attendance_corrections SET status = 'cancelled' WHERE id = ? AND user_id = ? AND status = 'pending'`,
+      [idParam(req), req.user.id],
+    );
+    if (!info.changes) fail('Request not found or no longer pending', 404);
+    res.json({ ok: true });
+  });
+
+  app.get('/api/me/payslip', requireEmployee, async (req, res) => {
+    const s = await settings();
+    const t = localToday(s);
+    const month = isMonth(req.query.month) ? req.query.month : t.date.slice(0, 7);
+    if (month > t.date.slice(0, 7)) fail('That month has not started yet');
+    const row = (await payroll(db, s, month)).find((r) => r.user_id === req.user.id);
+    res.json({ month, company_name: s.company_name, currency: s.currency, red_value: s.red_value, black_value: s.black_value, overtime_rate: s.overtime_rate, row });
   });
 
   app.post('/api/me/leaves/:id/cancel', requireEmployee, async (req, res) => {
@@ -447,40 +613,50 @@ function createApp(db, { now = () => new Date() } = {}) {
 
   // ---------- Owner ----------
 
-  app.get('/api/admin/overview', requireOwner, async (req, res) => {
+  app.get('/api/admin/overview', requireManager, async (req, res) => {
     const s = await settings();
     await maybeRunAbsences(s);
     const t = localToday(s);
     const date = isDate(req.query.date) ? req.query.date : t.date;
-    const [rows, leaves, pending] = await Promise.all([
+    const scope = teamScope(req.user);
+    const [rows, leaves, pending, holiday] = await Promise.all([
       db.all(
-        `SELECT u.id, u.name, u.job_title, u.department, u.start_date, a.check_in_time, a.check_out_time, a.status,
+        `SELECT u.id, u.name, u.role, u.job_title, u.department, u.start_date, a.check_in_time, a.check_out_time, a.status,
                 a.distance_m, a.mood, a.mode
          FROM users u LEFT JOIN attendance a ON a.user_id = u.id AND a.work_date = ?
-         WHERE u.role = 'employee' AND u.active = 1 ORDER BY a.check_in_time IS NULL, a.check_in_time, u.name`,
-        [date],
+         WHERE u.role <> 'owner' AND u.active = 1 AND ${scope.sql}
+         ORDER BY a.check_in_time IS NULL, a.check_in_time, u.name`,
+        [date, ...scope.params],
       ),
       db.all(`SELECT user_id FROM leave_requests WHERE status = 'approved' AND ? BETWEEN from_date AND to_date`, [date]),
       db.get(
-        `SELECT (SELECT COUNT(*) FROM leave_requests WHERE status = 'pending') AS leaves,
-                (SELECT COUNT(*) FROM reward_requests WHERE status = 'pending') AS rewards`,
+        `SELECT (SELECT COUNT(*) FROM leave_requests l JOIN users u ON u.id = l.user_id WHERE l.status = 'pending' AND ${scope.sql}) AS leaves,
+                (SELECT COUNT(*) FROM reward_requests WHERE status = 'pending' AND ?) AS rewards,
+                (SELECT COUNT(*) FROM attendance_corrections c JOIN users u ON u.id = c.user_id WHERE c.status = 'pending' AND ${scope.sql}) AS corrections`,
+        [...scope.params, req.user.role === 'owner', ...scope.params],
       ),
+      db.get('SELECT name FROM holidays WHERE date = ?', [date]),
     ]);
     const onLeave = new Set(leaves.map((l) => l.user_id));
-    const closed = date < t.date || (date === t.date && toMinutes(t.time) >= toMinutes(s.close));
     for (const r of rows) {
-      if (r.status) continue;
-      if (date < r.start_date) r.status = 'not_started';
-      else if (onLeave.has(r.id)) r.status = 'leave';
-      else if (!isWorkDay(date, s)) r.status = 'off_day';
-      else r.status = closed ? 'absent' : 'waiting';
+      if (!r.status) {
+        const us = scheduleFor(s, r.department);
+        const closed = date < t.date || (date === t.date && toMinutes(t.time) >= toMinutes(us.close));
+        if (date < r.start_date) r.status = 'not_started';
+        else if (onLeave.has(r.id)) r.status = 'leave';
+        else if (holiday) r.status = 'holiday';
+        else if (!isWorkDay(date, us)) r.status = 'off_day';
+        else r.status = closed ? 'absent' : 'waiting';
+      }
+      r.worked_minutes = workedMinutes(r);
     }
     const trendFrom = addDays(date, -6);
     const trendRows = await db.all(
-      `SELECT work_date, COUNT(*) AS present, COUNT(*) FILTER (WHERE status IN ('late', 'very_late')) AS late, AVG(mood) AS mood,
-              COUNT(*) FILTER (WHERE status = 'early') AS early
-       FROM attendance WHERE work_date BETWEEN ? AND ? GROUP BY work_date`,
-      [trendFrom, date],
+      `SELECT a.work_date, COUNT(*) AS present, COUNT(*) FILTER (WHERE a.status IN ('late', 'very_late')) AS late, AVG(a.mood) AS mood,
+              COUNT(*) FILTER (WHERE a.status = 'early') AS early
+       FROM attendance a JOIN users u ON u.id = a.user_id
+       WHERE a.work_date BETWEEN ? AND ? AND ${scope.sql} GROUP BY a.work_date`,
+      [trendFrom, date, ...scope.params],
     );
     const trend = eachDate(trendFrom, date).map((d) => {
       const r = trendRows.find((x) => x.work_date === d) || {};
@@ -497,6 +673,8 @@ function createApp(db, { now = () => new Date() } = {}) {
       date,
       now: t,
       work_day: isWorkDay(date, s),
+      holiday: holiday?.name || null,
+      scope: req.user.role === 'owner' ? null : req.user.department || null,
       rows,
       trend,
       mood: {
@@ -505,7 +683,7 @@ function createApp(db, { now = () => new Date() } = {}) {
         dist: [1, 2, 3, 4, 5].map((m) => moods.filter((x) => x.mood === m).length),
         by_department: Object.entries(byDept).map(([department, m]) => ({ department, avg: avg(m), count: m.length })),
       },
-      pending: { leaves: Number(pending.leaves), rewards: Number(pending.rewards) },
+      pending: { leaves: Number(pending.leaves), rewards: Number(pending.rewards), corrections: Number(pending.corrections) },
       rules: pickRules(s),
     });
   });
@@ -577,15 +755,16 @@ function createApp(db, { now = () => new Date() } = {}) {
     const [users, bal] = await Promise.all([
       db.all(
         `SELECT id, name, username, role, phone, job_title, department, birthday, remote_allowed, active, start_date, created_at,
+                salary, annual_leave, sick_leave,
                 (SELECT COALESCE(json_agg(json_build_object('kind', d.kind, 'label', d.label, 'bound_at', d.bound_at, 'last_seen_at', d.last_seen_at)
                                  ORDER BY d.kind DESC), '[]'::json) FROM user_devices d WHERE d.user_id = users.id) AS devices,
                 (SELECT COUNT(*) FROM device_blocks b WHERE b.user_id = users.id AND b.created_at > now() - interval '30 days') AS device_blocks
-         FROM users ORDER BY role DESC, active DESC, name`,
+         FROM users ORDER BY role = 'owner' DESC, active DESC, name`,
       ),
       balancesByUser(db, month),
     ]);
     for (const u of users) {
-      if (u.role === 'employee') u.balances = bal.get(u.id) || { green: 0, month: { green: 0, red: 0, black: 0 } };
+      if (u.role !== 'owner') u.balances = bal.get(u.id) || { green: 0, month: { green: 0, red: 0, black: 0 } };
     }
     res.json(users);
   });
@@ -596,7 +775,7 @@ function createApp(db, { now = () => new Date() } = {}) {
     const name = str(req.body.name, 80);
     const username = str(req.body.username, 40);
     const password = typeof req.body.password === 'string' ? req.body.password : '';
-    const role = req.body.role === 'owner' ? 'owner' : 'employee';
+    const role = ROLES.includes(req.body.role) ? req.body.role : 'employee';
     if (!name || !/^[\w.@-]{3,40}$/.test(username)) fail('Enter a name and a username (3+ letters, no spaces)');
     if (password.length < 6) fail('Password must be at least 6 characters');
     // Absences start counting today, or tomorrow if today's check-in window has already closed.
@@ -606,12 +785,15 @@ function createApp(db, { now = () => new Date() } = {}) {
       fail('Username already exists', 409);
     }
     const row = await db.get(
-      `INSERT INTO users (name, username, password_hash, role, phone, job_title, start_date, department, birthday, remote_allowed)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+      `INSERT INTO users (name, username, password_hash, role, phone, job_title, start_date, department, birthday, remote_allowed,
+                          salary, annual_leave, sick_leave)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       [name, username, auth.hashPassword(password), role, str(req.body.phone, 30) || null,
         str(req.body.job_title, 80) || null, startDate, str(req.body.department, 40) || null,
-        isDate(req.body.birthday) ? req.body.birthday : null, req.body.remote_allowed ? 1 : 0],
+        isDate(req.body.birthday) ? req.body.birthday : null, req.body.remote_allowed ? 1 : 0,
+        optNum(req.body.salary, 0, 1e8, 'Salary'), optInt(req.body.annual_leave, 'Annual leave'), optInt(req.body.sick_leave, 'Sick leave')],
     );
+    await audit(req.user, 'user.create', `${name} (@${username}, ${role})`, row.id);
     res.status(201).json({ id: row.id });
   });
 
@@ -626,6 +808,14 @@ function createApp(db, { now = () => new Date() } = {}) {
     if (b.department !== undefined) fields.department = str(b.department, 40) || null;
     if (b.birthday !== undefined) fields.birthday = b.birthday === '' || b.birthday === null ? null : isDate(b.birthday) ? b.birthday : fail('Invalid birthday');
     if (b.remote_allowed !== undefined) fields.remote_allowed = b.remote_allowed ? 1 : 0;
+    if (b.salary !== undefined) fields.salary = optNum(b.salary, 0, 1e8, 'Salary');
+    if (b.annual_leave !== undefined) fields.annual_leave = optInt(b.annual_leave, 'Annual leave');
+    if (b.sick_leave !== undefined) fields.sick_leave = optInt(b.sick_leave, 'Sick leave');
+    if (b.role !== undefined && b.role !== user.role) {
+      if (!ROLES.includes(b.role)) fail('Invalid role');
+      if (user.id === req.user.id) fail('You cannot change your own role');
+      fields.role = b.role;
+    }
     // reset_device: 'mobile' | 'desktop' | true (both). Signs out sessions on the removed devices.
     if (b.reset_device) {
       const kinds = b.reset_device === 'mobile' || b.reset_device === 'desktop' ? [b.reset_device] : ['mobile', 'desktop'];
@@ -653,15 +843,22 @@ function createApp(db, { now = () => new Date() } = {}) {
         user.id,
       ]);
     }
-    if ((fields.password_hash || fields.active === 0) && user.id !== req.user.id) {
+    if ((fields.password_hash || fields.active === 0 || fields.role) && user.id !== req.user.id) {
       await db.run('DELETE FROM sessions WHERE user_id = ?', [user.id]);
+    }
+    const changed = [...keys.map((k) => (k === 'password_hash' ? 'password' : k)), ...(b.reset_device ? ['device reset'] : [])];
+    if (changed.length) {
+      const extra = [fields.role && `role → ${fields.role}`, fields.salary !== undefined && `salary → ${fields.salary ?? '—'}`].filter(Boolean);
+      await audit(req.user, 'user.update', `${user.name}: ${changed.join(', ')}${extra.length ? ` (${extra.join('; ')})` : ''}`, user.id);
     }
     res.json({ ok: true });
   });
 
-  app.get('/api/admin/users/:id/history', requireOwner, async (req, res) => {
+  app.get('/api/admin/users/:id/history', requireManager, async (req, res) => {
+    const id = idParam(req);
+    await assertManages(req.user, id);
     const month = isMonth(req.query.month) ? req.query.month : localToday(await settings()).date.slice(0, 7);
-    res.json(await historyFor(idParam(req), month));
+    res.json(await historyFor(id, month));
   });
 
   app.post('/api/admin/points', requireOwner, async (req, res) => {
@@ -681,6 +878,7 @@ function createApp(db, { now = () => new Date() } = {}) {
       }
       await addPoints(tx, { userId, kind, delta, workDate, source: 'manual', reason, createdBy: req.user.id });
     });
+    await audit(req.user, 'points.adjust', `${delta > 0 ? '+' : ''}${delta} ${kind} on ${workDate}: ${reason}`, userId);
     const em = { green: '🟢', red: '🔴', black: '⚫' }[kind];
     await push.notifyUsers(db, [userId], {
       title: `${em} ${delta > 0 ? '+' : ''}${delta} ${kind} point${Math.abs(delta) === 1 ? '' : 's'}`,
@@ -720,23 +918,30 @@ function createApp(db, { now = () => new Date() } = {}) {
       );
       await tx.run(`DELETE FROM points WHERE user_id = ? AND work_date = ? AND source = 'absent'`, [userId, date]);
     });
+    await audit(req.user, 'attendance.manual', `${date} at ${time} (${status})`, userId);
     res.status(201).json({ ok: true });
   });
 
-  app.get('/api/admin/leaves', requireOwner, async (req, res) => {
+  app.get('/api/admin/leaves', requireManager, async (req, res) => {
     const status = ['pending', 'approved', 'rejected', 'cancelled'].includes(req.query.status) ? req.query.status : null;
+    const scope = teamScope(req.user);
     res.json(
       await db.all(
-        `SELECT l.*, u.name AS user_name FROM leave_requests l JOIN users u ON u.id = l.user_id
-         WHERE (?::text IS NULL OR l.status = ?::text) ORDER BY l.status = 'pending' DESC, l.id DESC LIMIT 200`,
-        [status, status],
+        `SELECT l.*, u.name AS user_name, u.department, d.name AS decided_by_name
+         FROM leave_requests l JOIN users u ON u.id = l.user_id LEFT JOIN users d ON d.id = l.decided_by
+         WHERE (?::text IS NULL OR l.status = ?::text) AND ${scope.sql}
+         ORDER BY l.status = 'pending' DESC, l.id DESC LIMIT 200`,
+        [status, status, ...scope.params],
       ),
     );
   });
 
-  app.post('/api/admin/leaves/:id/decision', requireOwner, async (req, res) => {
+  app.post('/api/admin/leaves/:id/decision', requireManager, async (req, res) => {
     const decision = req.body.decision;
     if (!['approve', 'reject'].includes(decision)) fail('Invalid decision');
+    const pendingRow = await db.get('SELECT user_id FROM leave_requests WHERE id = ?', [idParam(req)]);
+    if (!pendingRow) fail('Request not found', 404);
+    await assertManages(req.user, pendingRow.user_id);
     const l = await db.tx(async (tx) => {
       const l = await tx.get(
         `UPDATE leave_requests SET status = ?, decided_by = ?, decided_at = now()
@@ -754,6 +959,7 @@ function createApp(db, { now = () => new Date() } = {}) {
       }
       return l;
     });
+    await audit(req.user, `leave.${decision}`, `${LEAVE_LABEL[l.type] || 'Leave'} ${l.from_date === l.to_date ? l.from_date : `${l.from_date} → ${l.to_date}`}`, l.user_id);
     await push.notifyUsers(db, [l.user_id], {
       title: decision === 'approve' ? '✅ Leave approved' : '❌ Leave request declined',
       body: `${l.from_date === l.to_date ? l.from_date : `${l.from_date} → ${l.to_date}`}${decision === 'approve' ? '. Enjoy your time off!' : ''}`,
@@ -787,6 +993,7 @@ function createApp(db, { now = () => new Date() } = {}) {
       if (decision === 'reject') await refundReward(tx, s, r, req.user.id);
       return r;
     });
+    await audit(req.user, `reward.${decision === 'paid' ? 'paid' : 'reject'}`, `${r.points} points = ${r.amount} ${s.currency}`, r.user_id);
     await push.notifyUsers(db, [r.user_id], {
       title: decision === 'paid' ? '💸 Your reward was paid!' : 'Reward request declined',
       body: decision === 'paid' ? `${r.amount} ${s.currency} is on its way. Well deserved!` : `Your ${r.points} points were returned to your balance.`,
@@ -809,21 +1016,234 @@ function createApp(db, { now = () => new Date() } = {}) {
   app.get('/api/admin/report.csv', requireOwner, async (req, res) => {
     const { month, rows } = await reportFor(req);
     const header = [
-      'Name', 'Job title', 'Days present', 'Early', 'On time', 'Late', 'Leave days',
+      'Name', 'Department', 'Job title', 'Days present', 'Early', 'On time', 'Late', 'Leave days', 'Hours worked', 'Overtime hours',
       'Green (month)', 'Green balance', 'Red', 'Black (absences)', 'Red deduction', 'Black deduction', 'Total deduction',
     ];
     const keys = [
-      'name', 'job_title', 'days_present', 'early', 'on_time', 'late', 'leave_days',
+      'name', 'department', 'job_title', 'days_present', 'early', 'on_time', 'late', 'leave_days', 'hours', 'overtime',
       'green_month', 'green_balance', 'red', 'black', 'red_deduction', 'black_deduction', 'total_deduction',
     ];
-    const cell = (v) => {
-      const s = v == null ? '' : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const csv = [header, ...rows.map((r) => keys.map((k) => r[k]))].map((line) => line.map(cell).join(',')).join('\r\n');
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="attendance-${month}.csv"`);
-    res.send(`﻿${csv}`);
+    for (const r of rows) {
+      r.hours = Math.round((r.worked_minutes / 60) * 100) / 100;
+      r.overtime = Math.round((r.overtime_minutes / 60) * 100) / 100;
+    }
+    sendCsv(res, `attendance-${month}.csv`, header, rows.map((r) => keys.map((k) => r[k])));
+  });
+
+  // ----- Payroll -----
+
+  async function payrollFor(req) {
+    const s = await settings();
+    await runAbsenceJob(db, s, now());
+    const month = isMonth(req.query.month) ? req.query.month : localToday(s).date.slice(0, 7);
+    return { month, currency: s.currency, overtime_rate: s.overtime_rate, rewards_in_net: !!s.payroll_add_rewards, rows: await payroll(db, s, month) };
+  }
+
+  app.get('/api/admin/payroll', requireOwner, async (req, res) => {
+    res.json(await payrollFor(req));
+  });
+
+  app.get('/api/admin/payroll.csv', requireOwner, async (req, res) => {
+    const { month, rows } = await payrollFor(req);
+    const header = [
+      'Name', 'Department', 'Salary', 'Work days', 'Days present', 'Hours worked', 'Overtime hours', 'Overtime pay',
+      'Red', 'Black', 'Red/black deduction', 'Unpaid leave days', 'Unpaid leave deduction', 'Rewards paid', 'Net pay',
+    ];
+    const keys = [
+      'name', 'department', 'salary', 'work_days', 'days_present', 'hours_worked', 'overtime_hours', 'overtime_pay',
+      'red', 'black', 'total_deduction', 'unpaid_days', 'unpaid_deduction', 'rewards_paid', 'net_pay',
+    ];
+    await audit(req.user, 'payroll.export', month);
+    sendCsv(res, `payroll-${month}.csv`, header, rows.filter((r) => r.active).map((r) => keys.map((k) => r[k])));
+  });
+
+  // ----- Attendance corrections (owner / lead) -----
+
+  app.get('/api/admin/corrections', requireManager, async (req, res) => {
+    const status = ['pending', 'approved', 'rejected', 'cancelled'].includes(req.query.status) ? req.query.status : null;
+    const scope = teamScope(req.user);
+    res.json(
+      await db.all(
+        `SELECT c.*, u.name AS user_name, u.department, d.name AS decided_by_name
+         FROM attendance_corrections c JOIN users u ON u.id = c.user_id LEFT JOIN users d ON d.id = c.decided_by
+         WHERE (?::text IS NULL OR c.status = ?::text) AND ${scope.sql}
+         ORDER BY c.status = 'pending' DESC, c.id DESC LIMIT 200`,
+        [status, status, ...scope.params],
+      ),
+    );
+  });
+
+  // Approving a missing check-in records it like a real one (points by the department's windows) and clears the absence.
+  app.post('/api/admin/corrections/:id/decision', requireManager, async (req, res) => {
+    const decision = req.body.decision;
+    if (!['approve', 'reject'].includes(decision)) fail('Invalid decision');
+    const company = await settings();
+    const pendingRow = await db.get('SELECT user_id FROM attendance_corrections WHERE id = ?', [idParam(req)]);
+    if (!pendingRow) fail('Request not found', 404);
+    await assertManages(req.user, pendingRow.user_id);
+    const c = await db.tx(async (tx) => {
+      const c = await tx.get(
+        `UPDATE attendance_corrections SET status = ?, decided_by = ?, decided_at = now()
+         WHERE id = ? AND status = 'pending' RETURNING *`,
+        [decision === 'approve' ? 'approved' : 'rejected', req.user.id, idParam(req)],
+      );
+      if (!c) fail('Request not found or already decided', 404);
+      if (decision === 'reject') return c;
+      await lockUser(tx, c.user_id);
+      const user = await tx.get('SELECT department FROM users WHERE id = ?', [c.user_id]);
+      const us = scheduleFor(company, user.department);
+      const existing = await tx.get('SELECT * FROM attendance WHERE user_id = ? AND work_date = ?', [c.user_id, c.work_date]);
+      if (existing) {
+        if (!c.check_out_time) fail('That day was already recorded in the meantime', 409);
+        if (existing.check_out_time) fail('That day already has a check-out', 409);
+        await tx.run('UPDATE attendance SET check_out_time = ?, check_out_at = now() WHERE id = ?', [c.check_out_time, existing.id]);
+        return c;
+      }
+      let result;
+      if (!isWorkDay(c.work_date, us)) result = { status: 'off_day', green: 0, red: 0 };
+      else if (toMinutes(c.check_in_time) < toMinutes(us.early_start)) result = { status: 'early', green: 1, red: 0 };
+      else if (toMinutes(c.check_in_time) >= toMinutes(us.close)) result = { status: 'very_late', green: 0, red: Number(us.very_late_reds) || 1 };
+      else result = classifyCheckIn(c.check_in_time, us);
+      const row = await tx.get(
+        `INSERT INTO attendance (user_id, work_date, check_in_time, check_in_at, status, check_out_time, check_out_at, mode)
+         VALUES (?, ?, ?, now(), ?, ?, ?, 'office') RETURNING id`,
+        [c.user_id, c.work_date, c.check_in_time, result.status, c.check_out_time, c.check_out_time ? now().toISOString() : null],
+      );
+      await tx.run(`DELETE FROM points WHERE user_id = ? AND work_date = ? AND source = 'absent'`, [c.user_id, c.work_date]);
+      if (result.green) {
+        await addPoints(tx, {
+          userId: c.user_id, kind: 'green', delta: result.green, workDate: c.work_date,
+          source: 'early', reason: `Early check-in ${c.check_in_time} (correction)`, refId: row.id, createdBy: req.user.id,
+        });
+      }
+      if (result.red) {
+        await addPoints(tx, {
+          userId: c.user_id, kind: 'red', delta: result.red, workDate: c.work_date,
+          source: 'late', reason: `Late check-in ${c.check_in_time} (correction)`, refId: row.id, createdBy: req.user.id,
+        });
+      }
+      return c;
+    });
+    await audit(req.user, `correction.${decision}`, `${c.work_date}: ${[c.check_in_time && `in ${c.check_in_time}`, c.check_out_time && `out ${c.check_out_time}`].filter(Boolean).join(', ')}`, c.user_id);
+    await push.notifyUsers(db, [c.user_id], {
+      title: decision === 'approve' ? '✅ Attendance fixed' : '❌ Attendance fix declined',
+      body: `${c.work_date}${decision === 'approve' ? ' is now recorded.' : ''}`,
+      url: '/#/corrections', tag: `correction-${c.id}`,
+    });
+    res.json({ ok: true });
+  });
+
+  // ----- Official holidays -----
+
+  app.get('/api/holidays', requireUser, async (req, res) => {
+    const year = /^\d{4}$/.test(req.query.year || '') ? req.query.year : null;
+    res.json(await db.all(`SELECT * FROM holidays WHERE (?::text IS NULL OR date LIKE ?::text || '-%') ORDER BY date`, [year, year]));
+  });
+
+  // Adding a holiday also removes absences already recorded for that day.
+  async function addHoliday(date, name) {
+    const row = await db.get(
+      'INSERT INTO holidays (date, name) VALUES (?, ?) ON CONFLICT (date) DO UPDATE SET name = excluded.name RETURNING *',
+      [date, name],
+    );
+    await db.run(`DELETE FROM points WHERE work_date = ? AND source = 'absent'`, [date]);
+    return row;
+  }
+
+  app.post('/api/admin/holidays', requireOwner, async (req, res) => {
+    const name = str(req.body.name, 80);
+    const from = req.body.date;
+    const to = req.body.to_date || from;
+    if (!isDate(from) || !isDate(to) || to < from) fail('Choose the date(s)');
+    if (!name) fail('Give the holiday a name');
+    if (eachDate(from, to).length > 14) fail('A holiday can be at most 14 days. Add longer breaks as leave.');
+    for (const d of eachDate(from, to)) await addHoliday(d, name);
+    await audit(req.user, 'holiday.add', `${name}: ${from === to ? from : `${from} → ${to}`}`);
+    res.status(201).json({ ok: true });
+  });
+
+  app.post('/api/admin/holidays/preset', requireOwner, async (req, res) => {
+    const year = /^\d{4}$/.test(String(req.body.year || '')) ? String(req.body.year) : localToday(await settings()).date.slice(0, 4);
+    for (const [md, name] of EGYPT_HOLIDAYS) await addHoliday(`${year}-${md}`, name);
+    await audit(req.user, 'holiday.preset', `Egypt fixed holidays ${year}`);
+    res.status(201).json({ added: EGYPT_HOLIDAYS.length });
+  });
+
+  app.post('/api/admin/holidays/:id/delete', requireOwner, async (req, res) => {
+    const row = await db.get('DELETE FROM holidays WHERE id = ? RETURNING *', [idParam(req)]);
+    if (!row) fail('Not found', 404);
+    await audit(req.user, 'holiday.remove', `${row.name}: ${row.date}`);
+    res.json({ ok: true });
+  });
+
+  // ----- Activity log, weekly summary, backup -----
+
+  app.get('/api/admin/audit', requireOwner, async (req, res) => {
+    const before = posInt(req.query.before);
+    res.json(
+      await db.all(
+        `SELECT a.*, u.name AS actor_name, u.role AS actor_role, t.name AS target_name
+         FROM audit_log a LEFT JOIN users u ON u.id = a.actor_id LEFT JOIN users t ON t.id = a.target_user_id
+         WHERE (?::int IS NULL OR a.id < ?::int) ORDER BY a.id DESC LIMIT 100`,
+        [before, before],
+      ),
+    );
+  });
+
+  app.post('/api/admin/weekly-summary', requireOwner, async (req, res) => {
+    const summary = await weeklySummary(await settings());
+    const sent = await push.notifyUsers(db, [req.user.id], summary.push);
+    res.json({ sent, summary: summary.data });
+  });
+
+  // Full backup: one sheet per table (passwords, sessions and device hashes are left out).
+  app.get('/api/admin/export.xlsx', requireOwner, async (req, res) => {
+    const ExcelJS = require('exceljs');
+    const s = await settings();
+    const wb = new ExcelJS.Workbook();
+    wb.creator = s.company_name;
+    wb.created = now();
+    const sheets = [
+      ['Staff', `SELECT id, name, username, role, department, job_title, phone, birthday, start_date, active, remote_allowed,
+                        salary, annual_leave, sick_leave, created_at FROM users ORDER BY id`],
+      ['Attendance', `SELECT a.id, a.user_id, u.name, a.work_date, a.check_in_time, a.check_out_time, a.status, a.mode,
+                             a.distance_m, a.accuracy, a.mood FROM attendance a JOIN users u ON u.id = a.user_id ORDER BY a.work_date, u.name`],
+      ['Points', `SELECT p.id, p.user_id, u.name, p.kind, p.delta, p.work_date, p.source, p.reason, c.name AS created_by, p.created_at
+                  FROM points p JOIN users u ON u.id = p.user_id LEFT JOIN users c ON c.id = p.created_by ORDER BY p.id`],
+      ['Leave', `SELECT l.id, l.user_id, u.name, l.type, l.from_date, l.to_date, l.reason, l.status, d.name AS decided_by, l.decided_at, l.created_at
+                 FROM leave_requests l JOIN users u ON u.id = l.user_id LEFT JOIN users d ON d.id = l.decided_by ORDER BY l.id`],
+      ['Corrections', `SELECT c.id, c.user_id, u.name, c.work_date, c.check_in_time, c.check_out_time, c.reason, c.status,
+                              d.name AS decided_by, c.decided_at, c.created_at
+                       FROM attendance_corrections c JOIN users u ON u.id = c.user_id LEFT JOIN users d ON d.id = c.decided_by ORDER BY c.id`],
+      ['Rewards', `SELECT r.id, r.user_id, u.name, r.points, r.amount, r.method, r.payout_number, r.status, d.name AS decided_by, r.decided_at, r.created_at
+                   FROM reward_requests r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.decided_by ORDER BY r.id`],
+      ['Holidays', 'SELECT id, date, name FROM holidays ORDER BY date'],
+      ['Kudos', `SELECT k.id, f.name AS "from", t.name AS "to", k.category, k.message, k.created_at
+                 FROM kudos k JOIN users f ON f.id = k.from_user JOIN users t ON t.id = k.to_user ORDER BY k.id`],
+      ['Announcements', `SELECT a.id, a.title, a.body, a.kind, a.pinned, u.name AS author, a.created_at
+                         FROM announcements a LEFT JOIN users u ON u.id = a.created_by ORDER BY a.id`],
+      ['Activity log', `SELECT a.id, a.created_at, u.name AS by, a.action, t.name AS about, a.detail
+                        FROM audit_log a LEFT JOIN users u ON u.id = a.actor_id LEFT JOIN users t ON t.id = a.target_user_id ORDER BY a.id`],
+    ];
+    for (const [title, sql] of sheets) {
+      const rows = await db.all(sql);
+      const ws = wb.addWorksheet(title, { views: [{ state: 'frozen', ySplit: 1 }] });
+      const cols = rows.length ? Object.keys(rows[0]) : [];
+      ws.columns = cols.map((k) => ({ header: k, key: k, width: Math.min(40, Math.max(10, k.length + 2)) }));
+      for (const r of rows) ws.addRow(r);
+      ws.getRow(1).font = { bold: true };
+    }
+    const settingsSheet = wb.addWorksheet('Settings');
+    settingsSheet.columns = [{ header: 'key', key: 'k', width: 24 }, { header: 'value', key: 'v', width: 80 }];
+    for (const [k, v] of Object.entries(s)) {
+      if (k !== 'holiday_dates') settingsSheet.addRow({ k, v: typeof v === 'object' ? JSON.stringify(v) : v });
+    }
+    settingsSheet.getRow(1).font = { bold: true };
+    await audit(req.user, 'data.export', 'Full Excel backup');
+    const date = localToday(s).date;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="bahr-backup-${date}.xlsx"`);
+    res.send(Buffer.from(await wb.xlsx.writeBuffer()));
   });
 
   app.get('/api/admin/settings', requireOwner, async (req, res) => res.json(await settings()));
@@ -843,12 +1263,69 @@ function createApp(db, { now = () => new Date() } = {}) {
   });
 
   app.put('/api/admin/settings', requireOwner, async (req, res) => {
-    const next = validateSettings({ ...(await settings()), ...req.body });
+    const prev = await settings();
+    const next = validateSettings({ ...prev, ...req.body });
     await saveSettings(db, next);
-    res.json(next);
+    const changed = Object.keys(next).filter((k) => k !== 'holiday_dates' && JSON.stringify(next[k]) !== JSON.stringify(prev[k]));
+    if (changed.length) await audit(req.user, 'settings.update', changed.join(', '));
+    res.json({ ...next, holiday_dates: prev.holiday_dates });
   });
 
   // ---------- Helpers ----------
+
+  function sendCsv(res, filename, header, rows) {
+    const cell = (v) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csv = [header, ...rows].map((line) => line.map(cell).join(',')).join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(`\ufeff${csv}`);
+  }
+
+  // The last 7 days (ending today): attendance rate, lateness, absences, stars and what's waiting.
+  async function weeklySummary(s) {
+    const t = localToday(s);
+    const from = addDays(t.date, -6);
+    const [users, att, absences, greens, pending] = await Promise.all([
+      db.all(`SELECT id, name, department, start_date FROM users WHERE role <> 'owner' AND active = 1`),
+      db.all('SELECT user_id, work_date, status FROM attendance WHERE work_date BETWEEN ? AND ?', [from, t.date]),
+      db.get(`SELECT COUNT(*) AS n FROM points WHERE source = 'absent' AND work_date BETWEEN ? AND ?`, [from, t.date]),
+      db.all(
+        `SELECT u.name, SUM(p.delta) AS green FROM points p JOIN users u ON u.id = p.user_id
+         WHERE p.kind = 'green' AND p.delta > 0 AND p.work_date BETWEEN ? AND ? AND u.active = 1
+         GROUP BY u.id ORDER BY green DESC, u.name LIMIT 3`,
+        [from, t.date],
+      ),
+      db.get(
+        `SELECT (SELECT COUNT(*) FROM leave_requests WHERE status = 'pending') AS leaves,
+                (SELECT COUNT(*) FROM reward_requests WHERE status = 'pending') AS rewards,
+                (SELECT COUNT(*) FROM attendance_corrections WHERE status = 'pending') AS corrections`,
+      ),
+    ]);
+    let expected = 0;
+    for (const u of users) {
+      const us = scheduleFor(s, u.department);
+      expected += eachDate(from, t.date).filter((d) => d >= u.start_date && isWorkDay(d, us)).length;
+    }
+    const present = att.filter((a) => a.status !== 'off_day').length;
+    const late = att.filter((a) => a.status === 'late' || a.status === 'very_late').length;
+    const data = {
+      from, to: t.date, expected, present, late,
+      rate: expected ? Math.min(100, Math.round((present / expected) * 100)) : 100,
+      absences: Number(absences.n),
+      stars: greens.map((g) => ({ name: g.name, green: Number(g.green) })),
+      pending: { leaves: Number(pending.leaves), rewards: Number(pending.rewards), corrections: Number(pending.corrections) },
+    };
+    const waiting = data.pending.leaves + data.pending.rewards + data.pending.corrections;
+    const body = [
+      `Attendance ${data.rate}% · ${late} late · ${data.absences} absence${data.absences === 1 ? '' : 's'}`,
+      data.stars.length ? `⭐ ${data.stars.map((x) => x.name.split(' ')[0]).join(', ')}` : null,
+      waiting ? `${waiting} request${waiting === 1 ? '' : 's'} waiting` : 'Nothing waiting for you',
+    ].filter(Boolean).join(' · ');
+    return { data, push: { title: '📊 Your week at a glance', body, url: '/#/reports', tag: `weekly-${t.date}` } };
+  }
 
   function refundReward(tx, s, r, by) {
     return addPoints(tx, {
@@ -858,7 +1335,8 @@ function createApp(db, { now = () => new Date() } = {}) {
   }
 
   // Current streak of early / on-time work days and this month's attendance rate.
-  async function attendanceStats(user, s, t) {
+  async function attendanceStats(user, company, t) {
+    const s = scheduleFor(company, user.department);
     const from = addDays(t.date, -90);
     const [att, leaves] = await Promise.all([
       db.all('SELECT work_date, status FROM attendance WHERE user_id = ? AND work_date >= ?', [user.id, from]),
@@ -920,7 +1398,7 @@ function pickRules(s) {
   const keys = [
     'company_name', 'currency', 'early_start', 'early_end', 'late_after', 'very_late_after', 'close',
     'very_late_reds', 'work_days', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'radius_m',
-    'departments', 'kudos_daily_limit', 'kudos_green',
+    'departments', 'kudos_daily_limit', 'kudos_green', 'daily_hours', 'annual_leave_days', 'sick_leave_days',
   ];
   return { ...Object.fromEntries(keys.map((k) => [k, s[k]])), location_set: s.office_lat != null };
 }
@@ -970,6 +1448,36 @@ function validateSettings(s) {
   num('kudos_green', 0, 10);
   if (!Array.isArray(s.departments) || s.departments.length > 40) fail('Invalid departments');
   out.departments = [...new Set(s.departments.map((d) => str(d, 40)).filter(Boolean))];
+  num('daily_hours', 1, 24);
+  num('overtime_rate', 0, 10);
+  num('annual_leave_days', 0, 365);
+  num('sick_leave_days', 0, 365);
+  out.payroll_add_rewards = !!s.payroll_add_rewards;
+  out.weekly_summary = s.weekly_summary !== false;
+  out.dept_schedules = validateSchedules(s.dept_schedules, out.departments);
+  delete out.holiday_dates;
+  return out;
+}
+
+const TIME_KEYS = ['early_start', 'early_end', 'late_after', 'very_late_after', 'close'];
+
+// { department: { early_start..close, work_days, daily_hours } }. A department without an entry uses the company schedule.
+function validateSchedules(input, departments) {
+  if (input == null) return {};
+  if (typeof input !== 'object' || Array.isArray(input)) fail('Invalid department schedules');
+  const out = {};
+  for (const [dept, sch] of Object.entries(input)) {
+    if (!departments.includes(dept) || !sch || typeof sch !== 'object') continue;
+    for (const k of TIME_KEYS) if (!isTime(sch[k])) fail(`${dept}: ${k.replace(/_/g, ' ')} must be in HH:MM format`);
+    const order = TIME_KEYS.map((k) => toMinutes(sch[k]));
+    if (order.some((m, i) => i > 0 && m < order[i - 1])) fail(`${dept}: times must be in order`);
+    if (!Array.isArray(sch.work_days) || !sch.work_days.length || sch.work_days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
+      fail(`${dept}: choose the work days`);
+    }
+    const hours = Number(sch.daily_hours);
+    if (!Number.isFinite(hours) || hours < 1 || hours > 24) fail(`${dept}: daily hours must be between 1 and 24`);
+    out[dept] = { ...Object.fromEntries(TIME_KEYS.map((k) => [k, sch[k]])), work_days: [...new Set(sch.work_days)], daily_hours: hours };
+  }
   return out;
 }
 

@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.12",
+    "exceljs": "^4.4.0",
     "express": "^5.1.0",
     "pg": "^8.23.1",
     "web-push": "^3.6.7"

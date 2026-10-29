@@ -161,6 +161,49 @@ CREATE TABLE IF NOT EXISTS reward_requests (
   decided_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Team leads: employees who approve requests and see attendance for their own department.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('owner', 'lead', 'employee'));
+
+-- Payroll and leave allowances (NULL allowance = company default from settings).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS salary DOUBLE PRECISION;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS annual_leave INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sick_leave INTEGER;
+ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'annual';
+
+-- Official holidays: no check-in is expected and no absence is recorded.
+CREATE TABLE IF NOT EXISTS holidays (
+  id SERIAL PRIMARY KEY,
+  date TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- "I forgot to check in / out": approved by the owner or the department lead.
+CREATE TABLE IF NOT EXISTS attendance_corrections (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  work_date TEXT NOT NULL,
+  check_in_time TEXT,
+  check_out_time TEXT,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+  decided_by INTEGER REFERENCES users(id),
+  decided_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Who did what (owner and lead actions).
+CREATE TABLE IF NOT EXISTS audit_log (
+  id SERIAL PRIMARY KEY,
+  actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  target_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  detail TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS audit_log_created ON audit_log (created_at DESC);
 `;
 
 const DEFAULT_SETTINGS = {
@@ -196,7 +239,22 @@ const DEFAULT_SETTINGS = {
   kudos_green: 0,
   // Security: lock each employee to the first device they log in from.
   device_lock: true,
+  // Working hours & overtime
+  daily_hours: 8,
+  overtime_rate: 1.5,
+  // Per-department overrides of the check-in windows / work days / hours, e.g.
+  // { "Video Production": { early_start: '09:00', ..., work_days: [...], daily_hours: 9 } }
+  dept_schedules: {},
+  // Leave allowance per year (work days)
+  annual_leave_days: 21,
+  sick_leave_days: 7,
+  // Payroll
+  payroll_add_rewards: false,
+  weekly_summary: true,
 };
+
+// Settings keys that are derived on read and never stored.
+const DERIVED_KEYS = ['holiday_dates'];
 
 // SQL is written with `?` placeholders and converted to Postgres' $1, $2, ...
 const toPg = (sql) => {
@@ -302,14 +360,19 @@ function connect(url = databaseUrl(), { pgliteDir } = {}) {
 }
 
 async function getSettings(db) {
-  const row = await db.get(`SELECT value FROM settings WHERE key = 'app'`);
-  return { ...DEFAULT_SETTINGS, ...(row ? JSON.parse(row.value) : {}) };
+  const [row, holidays] = await Promise.all([
+    db.get(`SELECT value FROM settings WHERE key = 'app'`),
+    db.all('SELECT date FROM holidays'),
+  ]);
+  return { ...DEFAULT_SETTINGS, ...(row ? JSON.parse(row.value) : {}), holiday_dates: holidays.map((h) => h.date) };
 }
 
 async function saveSettings(db, settings) {
+  const stored = { ...settings };
+  for (const k of DERIVED_KEYS) delete stored[k];
   await db.run(
     `INSERT INTO settings (key, value) VALUES ('app', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-    [JSON.stringify(settings)],
+    [JSON.stringify(stored)],
   );
 }
 

@@ -17,7 +17,9 @@ Staff attendance and management system for Bahr Network. It covers GPS check-in,
 - **Points dashboard** showing the green balance, this month's red and black points, and the live monthly deduction (`Red × 250 EGP + Black × 1,000 EGP`).
 - **Swap points:** use 1 green point to remove 1 red penalty from the current month.
 - **Reward requests:** turn green points into money (`points × green value`), paid out via InstaPay, Vodafone Cash or cash.
-- **Leave requests:** approved leave days are never counted as absences.
+- **Leave requests** (annual, sick, unpaid) with a yearly balance: 21 annual + 7 sick days by default, changeable per person. Requests over the balance are refused, and approved leave days are never counted as absences.
+- **Fix attendance:** forgot to check in or out? Ask your manager. An approved fix records the check-in with the normal points and removes the absence (last 30 days).
+- **Payslip:** salary, overtime, red/black deductions, unpaid leave and net pay for any month, printable / save as PDF.
 - **History:** monthly attendance and a full log of points.
 
 **Owner / manager**
@@ -27,6 +29,12 @@ Staff attendance and management system for Bahr Network. It covers GPS check-in,
 - **Approve or reject leave.** Approving leave removes any black absences already recorded for those days.
 - **Reward requests:** mark as paid, or reject (the points go back to the employee).
 - **Monthly report:** present, early, on-time, late, leave, green, red and black counts, plus deductions per employee. Can be exported to CSV for Excel.
+- **Payroll:** net pay per person (`salary − red/black deductions − unpaid leave + overtime`, optionally + paid rewards), hours worked and overtime, a payslip per person, CSV export.
+- **Official holidays:** add holidays (or Egypt's fixed ones in one tap). No absences or reminders on those days.
+- **Team leads:** give someone the *Team lead* role and a department. They check in like everyone else, and also see their department's board and approve its leave and attendance fixes. They can't see salaries, settings or other departments.
+- **Department schedules:** a department can have its own check-in times, work days and hours per day (e.g. a video team starting later).
+- **Weekly summary** push every Thursday afternoon: attendance rate, late arrivals, absences, the week's stars and pending requests.
+- **Activity log** of every owner/lead action (approvals, edits, point changes, settings, exports) and a **full Excel backup** with one sheet per table.
 - **Settings:** office location (with a "use my current location" button), radius, GPS accuracy, check-in times, work days, money values and currency.
 
 **Culture & engagement** (built for a creative / marketing agency)
@@ -77,7 +85,7 @@ Absences are recorded automatically. Each work day an active employee missed (no
 4. **Redeploy** so the new environment variables are picked up.
 5. Open the site. On the first visit you create the owner account. Then go to **Settings** and set the office location.
 
-Tables are created automatically on first request. Absences are recorded whenever the app is used (at most every 5 minutes). Once a day, Vercel Cron calls `/api/cron/daily` (`vercel.json`, 04:30 UTC, about 06:30–07:30 Cairo time): it records absences and sends the morning check-in reminder.
+Tables are created automatically on first request. Absences are recorded whenever the app is used (at most every 5 minutes). Once a day, Vercel Cron calls `/api/cron/daily` (`vercel.json`, 04:30 UTC, about 06:30–07:30 Cairo time): it records absences and sends the morning check-in reminder. Every Thursday at 14:00 UTC it calls `/api/cron/weekly` for the owners' weekly summary.
 
 ## Run locally
 

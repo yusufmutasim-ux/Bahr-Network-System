@@ -179,7 +179,7 @@ function registerCulture(app, ctx) {
         'INSERT INTO kudos (from_user, to_user, category, message, created_at) VALUES (?, ?, ?, ?, ?) RETURNING *',
         [req.user.id, to, category, message || null, now().toISOString()],
       );
-      if (s.kudos_green > 0 && target.role === 'employee') {
+      if (s.kudos_green > 0 && target.role !== 'owner') {
         await addPoints(tx, {
           userId: to, kind: 'green', delta: s.kudos_green, workDate: t.date,
           source: 'kudos', reason: `Kudos from ${req.user.name}`, refId: k.id,

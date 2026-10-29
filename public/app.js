@@ -61,6 +61,11 @@ const ICONS = {
   heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
   megaphone: '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
   flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  receipt: '<path d="M4 2v20l3-2 3 2 2-2 2 2 3-2 3 2V2l-3 2-3-2-2 2-2-2-3 2z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  party: '<path d="M5.8 11.3 2 22l10.7-3.8"/><path d="M4 3h.01M22 8h.01M15 2h.01M22 20h.01"/><path d="m22 2-2.24.75a2.9 2.9 0 0 0-1.96 3.12c.1.86-.57 1.63-1.45 1.63h-.38c-.86 0-1.6.6-1.76 1.44L14 10"/><path d="M11 13c1.93 1.93 2.83 4.17 2 5-.83.83-3.07-.07-5-2-1.93-1.93-2.83-4.17-2-5 .83-.83 3.07.07 5 2Z"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  team: '<circle cx="12" cy="8" r="3"/><circle cx="5" cy="10" r="2"/><circle cx="19" cy="10" r="2"/><path d="M7 21v-2a5 5 0 0 1 10 0v2M1 21v-1a3 3 0 0 1 4-2.8M23 21v-1a3 3 0 0 0-4-2.8"/>',
 };
 const icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
 
@@ -105,6 +110,7 @@ const STATUS = {
   waiting: ['Not yet', ''],
   remote: ['Remote', 'sky'],
   not_started: ['Starts later', ''],
+  holiday: ['Holiday', 'sky'],
 };
 const KIND = { green: ['Green', 'lime'], red: ['Red', 'pink'], black: ['Black', 'dark'] };
 const SOURCE = {
@@ -116,6 +122,8 @@ const REQ = {
   rejected: ['Rejected', 'pink'], cancelled: ['Cancelled', 'slate'],
 };
 const METHODS = { instapay: 'InstaPay', vodafone_cash: 'Vodafone Cash', cash: 'Cash' };
+const LEAVE_TYPES = { annual: ['🏖️', 'Annual leave'], sick: ['🤒', 'Sick leave'], unpaid: ['💼', 'Unpaid leave'] };
+const ROLE_LABEL = { owner: 'Owner', lead: 'Team lead', employee: 'Employee' };
 const KUDOS = {
   creative: ['💡', 'Creative Spark', 'lime'],
   teamwork: ['🤝', 'Team Player', 'teal'],
@@ -175,6 +183,7 @@ const shortWhen = (iso) => {
   return `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}<br>${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
 };
 const money = (n, cur = rules().currency) => `${Number(n || 0).toLocaleString('en-US')} ${esc(cur || 'EGP')}`;
+const fmtHours = (min) => `${Math.floor(min / 60)}h${min % 60 ? ` ${String(min % 60).padStart(2, '0')}m` : ''}`;
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const daysBetween = (a, b) => Math.round((toDate(b) - toDate(a)) / 864e5);
 const localISODate = () => {
@@ -912,7 +921,9 @@ const EMPLOYEE_NAV = [
   { key: 'people', label: 'People', icon: 'users', view: (p) => viewPeople(p) },
   { group: 'Requests' },
   { key: 'leaves', label: 'Leave', icon: 'flag', view: () => viewMyLeaves() },
+  { key: 'corrections', label: 'Fix Attendance', icon: 'wrench', view: () => viewMyCorrections() },
   { key: 'rewards', label: 'Rewards', icon: 'gift', view: () => viewMyRewards() },
+  { key: 'payslip', label: 'Payslip', icon: 'receipt', view: (p) => viewPayslip(p) },
   { group: 'Fun' },
   { key: 'leaderboard', label: 'Leaderboard', icon: 'trophy', view: (p) => viewLeaderboard(p) },
   { key: 'account', label: 'Account', icon: 'user', view: () => viewAccount(), hidden: true },
@@ -922,6 +933,7 @@ const OWNER_NAV = [
   { group: 'Overview' },
   { key: '', label: 'Dashboard', icon: 'home', view: (p) => viewOwnerDashboard(p) },
   { key: 'reports', label: 'Monthly Report', icon: 'chart', view: (p) => viewReport(p) },
+  { key: 'payroll', label: 'Payroll', icon: 'receipt', view: (p) => viewPayroll(p) },
   { group: 'People' },
   { key: 'employees', label: 'Staff', icon: 'users', view: (p) => viewStaff(p) },
   { key: 'points', label: 'Points', icon: 'star', view: () => viewPoints() },
@@ -931,20 +943,39 @@ const OWNER_NAV = [
   { group: 'Requests' },
   { key: 'leaves', label: 'Leave Requests', icon: 'flag', view: (p) => viewLeaveRequests(p), count: () => pending.leaves },
   { key: 'rewards', label: 'Reward Requests', icon: 'gift', view: (p) => viewRewardRequests(p), count: () => pending.rewards },
+  { key: 'corrections', label: 'Attendance Fixes', icon: 'wrench', view: (p) => viewCorrectionRequests(p), count: () => pending.corrections || 0 },
   { group: 'System' },
+  { key: 'holidays', label: 'Holidays', icon: 'party', view: (p) => viewHolidays(p) },
+  { key: 'audit', label: 'Activity Log', icon: 'list', view: () => viewAudit() },
   { key: 'settings', label: 'Settings', icon: 'settings', view: () => viewSettings() },
+  { key: 'payslip', label: 'Payslip', icon: 'receipt', view: (p) => viewPayslip(p), hidden: true },
   { key: 'account', label: 'Account', icon: 'user', view: () => viewAccount(), hidden: true },
   { key: 'staff', label: 'Staff profile', icon: 'user', view: (p) => viewStaffProfile(p), hidden: true },
   { key: 'person', label: 'Profile', icon: 'user', view: (p) => viewPerson(p), hidden: true },
 ];
+// Team leads: everything an employee has, plus their department's board and approvals.
+const LEAD_NAV = (() => {
+  const i = EMPLOYEE_NAV.findIndex((n) => n.group === 'Team');
+  return [
+    ...EMPLOYEE_NAV.slice(0, i),
+    { group: 'My team' },
+    { key: 'team', label: 'Team Board', icon: 'team', view: (p) => viewTeam(p), count: () => (pending.leaves || 0) + (pending.corrections || 0) },
+    { key: 'team-leaves', label: 'Team Leave', icon: 'flag', view: (p) => viewLeaveRequests(p, 'team-leaves'), count: () => pending.leaves || 0 },
+    { key: 'team-fixes', label: 'Team Fixes', icon: 'wrench', view: (p) => viewCorrectionRequests(p, 'team-fixes'), count: () => pending.corrections || 0 },
+    { key: 'member', label: 'Team member', icon: 'user', view: (p) => viewMember(p), hidden: true },
+    ...EMPLOYEE_NAV.slice(i),
+  ];
+})();
 // Phones/tablets: four main tabs + "More" (everything else lives in a bottom sheet).
-const BOTTOM_LABEL = { '': 'Home', history: 'History', leaves: 'Leave', rewards: 'Rewards', leaderboard: 'Ranking', employees: 'Staff', reports: 'Report', wall: 'Wall', profile: 'Me' };
+const BOTTOM_LABEL = { '': 'Home', history: 'History', leaves: 'Leave', rewards: 'Rewards', leaderboard: 'Ranking', employees: 'Staff', reports: 'Report', wall: 'Wall', profile: 'Me', team: 'Team' };
 const BOTTOM = {
   employee: ['', 'wall', 'leaves', 'rewards'],
+  lead: ['', 'team', 'leaves', 'wall'],
   owner: ['', 'employees', 'leaves', 'wall'],
 };
 
-const navItems = () => (me.role === 'owner' ? OWNER_NAV : EMPLOYEE_NAV);
+const navItems = () => (me.role === 'owner' ? OWNER_NAV : me.role === 'lead' ? LEAD_NAV : EMPLOYEE_NAV);
+const roleLine = (u) => (u.role === 'owner' ? 'Owner' : u.role === 'lead' ? `Team lead${u.department ? ` · ${esc(u.department)}` : ''}` : esc(u.job_title || 'Staff'));
 const routeFor = (key) => navItems().find((n) => n.view && n.key === key);
 
 function parseHash() {
@@ -982,7 +1013,7 @@ function renderShell(active = parseHash().path) {
     <button class="icon-btn sm" type="button" data-theme-btn aria-label="Toggle theme">${icon(isDark() ? 'sun' : 'moon')}</button>
     <button class="icon-btn sm" type="button" data-logout aria-label="Log out">${icon('logout')}</button>`;
   $('#user-card').innerHTML = `${avatar(me.name)}
-    <div class="who"><strong>${esc(me.name)}</strong><span>${me.role === 'owner' ? 'Owner' : esc(me.job_title || 'Staff')} · @${esc(me.username)}</span></div>
+    <div class="who"><strong>${esc(me.name)}</strong><span>${roleLine(me)} · @${esc(me.username)}</span></div>
     <button class="icon-btn xs ghost" type="button" data-go="#/account" aria-label="Account">${icon('more')}</button>`;
 
   const bottom = BOTTOM[me.role].map((k) => routeFor(k));
@@ -1005,7 +1036,7 @@ function openMore() {
   dlg.innerHTML = `<div class="card">
     <div class="row" style="gap:12px;margin-bottom:16px">${avatar(me.name, 'lg')}
       <div style="flex:1;min-width:0"><strong style="font-size:1.05rem">${esc(me.name)}</strong>
-        <div class="muted small">${me.role === 'owner' ? 'Owner' : esc(me.job_title || 'Staff')} · @${esc(me.username)}</div></div>
+        <div class="muted small">${roleLine(me)} · @${esc(me.username)}</div></div>
       <button class="icon-btn ghost" type="button" data-close aria-label="Close">${icon('x')}</button></div>
     <div class="more-grid">${items
       .map((n) => {
@@ -1161,32 +1192,43 @@ async function start() {
 async function refreshCounts() {
   try {
     if (me.role === 'owner') {
-      const [o, leaves, rewards, feed] = await Promise.all([
+      const [o, leaves, rewards, feed, fixes] = await Promise.all([
         api('/admin/overview'),
         api('/admin/leaves?status=pending'),
         api('/admin/rewards?status=pending'),
         api('/admin/feed').catch(() => []),
+        api('/admin/corrections?status=pending').catch(() => []),
       ]);
       pending = o.pending;
       cachedRules = o.rules;
       renderOnline(o.rows);
       notifItems = [
-        ...leaves.map((l) => ({ at: l.created_at, who: l.user_name, text: `requested leave ${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}`, href: '#/leaves', ico: 'flag', unread: true })),
+        ...leaves.map((l) => ({ at: l.created_at, who: l.user_name, text: `requested ${(LEAVE_TYPES[l.type]?.[1] || 'leave').toLowerCase()} ${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}`, href: '#/leaves', ico: 'flag', unread: true })),
+        ...fixes.map((c) => ({ at: c.created_at, who: c.user_name, text: `asked to fix ${fmtDate(c.work_date)}`, href: '#/corrections', ico: 'wrench', unread: true })),
         ...rewards.map((r) => ({ at: r.created_at, who: r.user_name, text: `requested ${money(r.amount, o.rules.currency)} via ${METHODS[r.method]}`, href: '#/rewards', ico: 'gift', unread: true })),
         ...feed.filter((f) => f.type === 'device' && Date.now() - new Date(f.at) < 3 * 864e5).map((f) => ({ at: f.at, who: f.name, text: `⚠️ blocked login from ${f.extra || 'another device'}`, href: '#/employees', ico: 'lock', status: 'rejected', unread: true })),
       ].sort((a, b) => new Date(b.at) - new Date(a.at));
     } else {
       renderOnline(null);
-      const [leaves, rewards, kd] = await Promise.all([api('/me/leaves'), api('/me/rewards'), api(`/kudos?user_id=${me.id}`)]);
+      const [leaves, rewards, kd, fixes, team] = await Promise.all([
+        api('/me/leaves'), api('/me/rewards'), api(`/kudos?user_id=${me.id}`), api('/me/corrections').catch(() => []),
+        me.role === 'lead' ? Promise.all([api('/admin/overview'), api('/admin/leaves?status=pending'), api('/admin/corrections?status=pending')]).catch(() => null) : null,
+      ]);
       const seen = Number(store.get('seen', 0));
+      if (team) pending = team[0].pending;
       notifItems = [
+        ...(team ? [
+          ...team[1].map((l) => ({ at: l.created_at, who: l.user_name, text: `requested leave ${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}`, href: '#/team-leaves', ico: 'flag', action: true })),
+          ...team[2].map((c) => ({ at: c.created_at, who: c.user_name, text: `asked to fix ${fmtDate(c.work_date)}`, href: '#/team-fixes', ico: 'wrench', action: true })),
+        ] : []),
+        ...fixes.filter((c) => c.decided_at).map((c) => ({ at: c.decided_at, who: 'Attendance fix', text: `${fmtDate(c.work_date)} was ${c.status}`, href: '#/corrections', ico: 'wrench', status: c.status })),
         ...leaves.filter((l) => l.decided_at).map((l) => ({ at: l.decided_at, who: 'Leave', text: `${fmtDate(l.from_date)} → ${fmtDate(l.to_date)} was ${l.status}`, href: '#/leaves', ico: 'flag', status: l.status })),
         ...rewards.filter((r) => r.decided_at).map((r) => ({ at: r.decided_at, who: 'Reward', text: `${r.points} points request was ${r.status === 'paid' ? 'paid 🎉' : r.status}`, href: '#/rewards', ico: 'gift', status: r.status })),
         ...kd.rows.filter((k) => k.to_user === me.id).map((k) => ({ at: k.created_at, who: `${k.from_name} sent you kudos`, text: `${KUDOS[k.category]?.[0] || '🙌'} ${KUDOS[k.category]?.[1] || ''}${k.message ? `: "${k.message}"` : ''}`, href: '#/profile', ico: 'heart', status: 'approved', kind: 'kudos' })),
       ]
         .sort((a, b) => new Date(b.at) - new Date(a.at))
         .slice(0, 15)
-        .map((n) => ({ ...n, unread: new Date(n.at).getTime() > seen }));
+        .map((n) => ({ ...n, unread: n.action || new Date(n.at).getTime() > seen }));
     }
   } catch {
     /* non-critical */
@@ -1196,7 +1238,7 @@ const notifCount = () => notifItems.filter((n) => n.unread).length;
 
 // Celebrate good news the employee hasn't seen yet (paid rewards, new kudos), once per item.
 function celebrateNews() {
-  if (!me || me.role !== 'employee') return;
+  if (!me || me.role === 'owner') return;
   const fresh = notifItems.filter((n) => n.unread && (n.status === 'paid' || n.kind === 'kudos'));
   const shown = new Set(JSON.parse(store.get(`shown.${me.id}`, '[]')));
   const item = fresh.find((n) => !shown.has(`${n.at}|${n.who}`));
@@ -1223,10 +1265,10 @@ function toggleNotifications() {
         : empty('bell', "You're all caught up")
     }</div>`;
   pop.hidden = false;
-  if (me.role === 'employee') {
+  if (me.role !== 'owner') {
     store.set('seen', Date.now());
-    notifItems = notifItems.map((n) => ({ ...n, unread: false }));
-    $('#bell-btn').innerHTML = icon('bell');
+    notifItems = notifItems.map((n) => ({ ...n, unread: !!n.action }));
+    $('#bell-btn').innerHTML = `${icon('bell')}${notifCount() ? `<span class="badge-dot">${notifCount()}</span>` : ''}`;
   }
 }
 
@@ -1238,13 +1280,13 @@ async function openPalette() {
   if (me.role === 'owner' && !staffCache) staffCache = await api('/admin/users').catch(() => []);
   const items = [
     ...navItems().filter((n) => n.view && !['staff'].includes(n.key)).map((n) => ({ label: n.label, sub: 'Page', ico: n.icon, run: () => go(`#/${n.key}`) })),
-    ...(me.role === 'employee' ? [{ label: 'Check in now', sub: 'Action', ico: 'pin', run: () => go('#/') }] : []),
+    ...(me.role !== 'owner' ? [{ label: 'Check in now', sub: 'Action', ico: 'pin', run: () => go('#/') }] : []),
     { label: 'Send kudos to a teammate', sub: 'Action', ico: 'heart', run: () => kudosModal() },
     ...(me.role === 'owner'
       ? [
           { label: 'Add employee', sub: 'Action', ico: 'plus', run: () => { go('#/employees'); setTimeout(addEmployeeModal, 300); } },
           { label: "Export this month's report (CSV)", sub: 'Action', ico: 'download', run: () => (location.href = `/api/admin/report.csv?month=${thisMonth()}`) },
-          ...(staffCache || []).filter((u) => u.role === 'employee').map((u) => ({ label: u.name, sub: `${u.job_title || 'Staff'} · @${u.username}`, avatar: u.name, run: () => go(`#/staff?id=${u.id}`) })),
+          ...(staffCache || []).filter((u) => u.role !== 'owner').map((u) => ({ label: u.name, sub: `${u.job_title || 'Staff'} · @${u.username}`, avatar: u.name, run: () => go(`#/staff?id=${u.id}`) })),
         ]
       : []),
     { label: isDark() ? 'Switch to light mode' : 'Switch to dark mode', sub: 'Preference', ico: isDark() ? 'sun' : 'moon', run: toggleTheme },
@@ -1441,7 +1483,7 @@ function historyLists(h) {
         ? `<div class="list">${h.attendance
             .map(
               (a) => `<div class="list-item"><span class="avatar sm ${STATUS[a.status][1]}">${icon('clock')}</span>
-                <div class="grow"><strong>${fmtDate(a.work_date)}</strong><span>In ${fmtTime(a.check_in_time)} · Out ${fmtTime(a.check_out_time)} · ${a.distance_m == null ? 'Manual' : `${Math.round(a.distance_m)} m`}</span></div>
+                <div class="grow"><strong>${fmtDate(a.work_date)}</strong><span>In ${fmtTime(a.check_in_time)} · Out ${fmtTime(a.check_out_time)}${a.check_out_time ? ` · ${fmtHours(toMin(a.check_out_time) - toMin(a.check_in_time))}` : ''} · ${a.distance_m == null ? 'Manual' : `${Math.round(a.distance_m)} m`}</span></div>
                 ${chip(STATUS, a.status)}</div>`,
             )
             .join('')}</div>`
@@ -1504,7 +1546,8 @@ async function viewEmployeeHome() {
   } else {
     const gated = d.work_day && d.check_in_window !== 'open';
     const notes = [];
-    if (!d.work_day) notes.push(`<div class="notice slate">${icon('calendar')}Today is not a work day. Enjoy!</div>`);
+    if (d.holiday) notes.push(`<div class="notice sky">🎉 Today is an official holiday: <strong>${esc(d.holiday)}</strong>. Enjoy your day off!</div>`);
+    else if (!d.work_day) notes.push(`<div class="notice slate">${icon('calendar')}Today is not a work day. Enjoy!</div>`);
     if (d.on_leave) notes.push(`<div class="notice amber">${icon('flag')}You're on approved leave today.</div>`);
     if (gated && d.check_in_window === 'closed') notes.push(`<div class="notice dark">${icon('ban')}Check-in closed at ${fmtTime(r.close)}.</div>`);
     if (gated && d.check_in_window === 'not_open') notes.push(`<div class="notice sky">${icon('clock')}Check-in opens at ${fmtTime(r.early_start)}.</div>`);
@@ -1719,13 +1762,17 @@ EMPLOYEE_NAV.find((n) => n.key === 'history').view = viewHistoryPage;
 // ---------- Employee: leave ----------
 
 async function viewMyLeaves() {
-  const [list, d] = await Promise.all([api('/me/leaves'), api('/me/dashboard')]);
+  const [list, d, lb] = await Promise.all([api('/me/leaves'), api('/me/dashboard'), api('/me/leave-balance')]);
   const r = d.rules;
   const today = d.now.date;
   const year = today.slice(0, 4);
-  const workDaysIn = (from, to) => (from && to && to >= from ? eachDay(from, to).filter((x) => r.work_days.includes(toDate(x).getUTCDay())).length : 0);
-  const usedThisYear = list.filter((l) => l.status === 'approved' && l.from_date.startsWith(year)).reduce((a, l) => a + workDaysIn(l.from_date, l.to_date), 0);
+  const holidays = await api(`/holidays?year=${year}`).catch(() => []);
+  const nextYear = today.slice(5) > '10-01' ? await api(`/holidays?year=${Number(year) + 1}`).catch(() => []) : [];
+  const holidaySet = new Set([...holidays, ...nextYear].map((h) => h.date));
+  const workDaysIn = (from, to) => (from && to && to >= from ? eachDay(from, to).filter((x) => r.work_days.includes(toDate(x).getUTCDay()) && !holidaySet.has(x)).length : 0);
+  const bal = lb.balance;
   const pendingCount = list.filter((l) => l.status === 'pending').length;
+  const comingHolidays = [...holidays, ...nextYear].filter((h) => h.date >= today).slice(0, 4);
   const upcoming = list.filter((l) => l.status === 'pending' || (l.status === 'approved' && l.to_date >= today));
   const past = list.filter((l) => !upcoming.includes(l));
   const REASONS = [['🤒', 'Sick'], ['🏖️', 'Vacation'], ['👨‍👩‍👧', 'Family'], ['📚', 'Exam / study'], ['🏥', 'Appointment'], ['✏️', 'Other']];
@@ -1736,7 +1783,7 @@ async function viewMyLeaves() {
     return `<div class="leave-item">
       <div class="leave-date ${REQ[l.status][1]}"><b>${toDate(l.from_date).getUTCDate()}</b><span>${toDate(l.from_date).toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })}</span></div>
       <div class="grow"><strong>${l.from_date === l.to_date ? fmtDate(l.from_date) : `${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}`}</strong>
-        <span class="muted small">${days} day${days === 1 ? '' : 's'}${l.reason ? ` · ${esc(l.reason)}` : ''}</span></div>
+        <span class="muted small">${LEAVE_TYPES[l.type]?.[0] || ''} ${LEAVE_TYPES[l.type]?.[1] || 'Leave'} · ${days} day${days === 1 ? '' : 's'}${l.reason ? ` · ${esc(l.reason)}` : ''}</span></div>
       <div class="leave-side">${chip(REQ, l.status)}${l.status === 'pending' ? `<button class="btn sm light" data-cancel="${l.id}">Cancel</button>` : ''}</div>
     </div>`;
   };
@@ -1744,14 +1791,17 @@ async function viewMyLeaves() {
   $('#app').innerHTML = `
     ${pageHead('Leave 🏖️', 'Approved leave days never count as absences.')}
     <div class="grid g3 leave-stats" style="margin-bottom:16px">
+      ${tile('lime', 'Annual left', bal.annual.left, `of ${bal.annual.allowance} days in ${year}${bal.annual.pending ? ` · ${bal.annual.pending} pending` : ''}`, { big: true, arrow: false })}
+      ${tile('sky', 'Sick left', bal.sick.left, `of ${bal.sick.allowance} days${bal.sick.used ? ` · ${bal.sick.used} used` : ''}`, { big: true, arrow: false })}
       ${tile('amber', 'Pending', pendingCount, 'waiting for approval', { big: true, arrow: false })}
-      ${tile('lime', 'Days off', usedThisYear, `approved in ${year}`, { big: true, arrow: false })}
-      ${tile('sky', 'Upcoming', upcoming.filter((l) => l.status === 'approved').length, 'approved leaves', { big: true, arrow: false })}
     </div>
     <div class="split">
       <div class="card">
         <div class="card-head"><h2>New request</h2></div>
         <form id="leave" class="grid" style="gap:16px">
+          <input type="hidden" name="type" value="annual">
+          <div class="f"><span>Type</span>
+            <div class="seg quick" id="ltype">${Object.entries(LEAVE_TYPES).map(([k, [em, label]]) => `<button type="button" data-t="${k}" class="${k === 'annual' ? 'on' : ''}">${em} ${label.replace(' leave', '')}</button>`).join('')}</div></div>
           <div class="f"><span>When?</span>
             <div class="seg quick" id="quick">${QUICK.map(([k, label]) => `<button type="button" data-q="${k}">${label}</button>`).join('')}</div></div>
           <div class="form-grid two">
@@ -1771,6 +1821,8 @@ async function viewMyLeaves() {
           ? `${upcoming.length ? `<p class="list-label">Upcoming &amp; pending</p><div class="leave-list">${upcoming.map(item).join('')}</div>` : ''}
              ${past.length ? `<p class="list-label">History</p><div class="leave-list">${past.map(item).join('')}</div>` : ''}`
           : empty('flag', 'No leave requests yet')}
+        ${comingHolidays.length ? `<p class="list-label">Coming holidays</p><div class="list">${comingHolidays.map((h) => `<div class="list-item"><span class="avatar sm sky">🎉</span>
+          <div class="grow"><strong>${esc(h.name)}</strong><span>${fmtLong(h.date)}</span></div><span class="chip sky">in ${daysBetween(today, h.date)}d</span></div>`).join('')}</div>` : ''}
       </div>
     </div>`;
 
@@ -1787,9 +1839,12 @@ async function viewMyLeaves() {
     form.to_date.min = from || today;
     const total = from && form.to_date.value ? daysBetween(from, form.to_date.value) + 1 : 0;
     const work = workDaysIn(from, form.to_date.value);
+    const left = bal[form.type.value]?.left;
+    const over = left != null && work > left;
     $('#leave-sum').innerHTML = total
-      ? `<span class="leave-sum-ico">📅</span><div><strong>${total} day${total === 1 ? '' : 's'}</strong>
-          <span class="muted small">${from === form.to_date.value ? fmtDate(from) : `${fmtDate(from)} → ${fmtDate(form.to_date.value)}`} · ${work} work day${work === 1 ? '' : 's'}</span></div>`
+      ? `<span class="leave-sum-ico">${over ? '⚠️' : '📅'}</span><div><strong>${total} day${total === 1 ? '' : 's'}</strong>
+          <span class="muted small">${from === form.to_date.value ? fmtDate(from) : `${fmtDate(from)} → ${fmtDate(form.to_date.value)}`} · ${work} work day${work === 1 ? '' : 's'}${
+            left == null ? (form.type.value === 'unpaid' ? ' · deducted from salary' : '') : over ? ` · <b style="color:var(--red)">only ${left} left</b>` : ` · ${left - work} left after this`}</span></div>`
       : '';
     $$('#quick button').forEach((b) => {
       const q = QUICK.find((x) => x[0] === b.dataset.q);
@@ -1798,6 +1853,11 @@ async function viewMyLeaves() {
   };
   form.oninput = update;
   form.onchange = update;
+  $$('#ltype button').forEach((b) => (b.onclick = () => {
+    $$('#ltype button').forEach((x) => x.classList.toggle('on', x === b));
+    form.type.value = b.dataset.t;
+    update();
+  }));
   $$('#quick button').forEach((b) => (b.onclick = () => {
     const q = QUICK.find((x) => x[0] === b.dataset.q);
     form.from_date.value = plus(q[2]);
@@ -1960,7 +2020,7 @@ async function viewAccount() {
     <div class="grid g2">
       <div class="card">
         <div class="row" style="gap:16px">${avatar(me.name, 'lg')}<div><h2 style="font-size:1.2rem">${esc(me.name)}</h2>
-          <p class="muted small">${me.role === 'owner' ? 'Owner' : esc(me.job_title || 'Staff')} · @${esc(me.username)}</p></div></div>
+          <p class="muted small">${roleLine(me)} · @${esc(me.username)}</p></div></div>
         <div class="list mt">
           <div class="list-item">${icon('briefcase')}<div class="grow"><strong>Company</strong><span>${esc(company)}</span></div></div>
           <div class="list-item">${icon('phone')}<div class="grow"><strong>Phone</strong><span>${esc(me.phone || '—')}</span></div></div>
@@ -2077,7 +2137,7 @@ async function viewOwnerDashboard(params) {
   let q = '';
 
   $('#app').innerHTML = `
-    ${pageHead(`${greeting()}, ${esc(me.name.split(' ')[0])} <span class="wave">👋</span>`, `${fmtLong(o.date)}${o.work_day ? '' : ' · not a work day'}`, `
+    ${pageHead(`${greeting()}, ${esc(me.name.split(' ')[0])} <span class="wave">👋</span>`, `${fmtLong(o.date)}${o.holiday ? ` · 🎉 ${esc(o.holiday)}` : o.work_day ? '' : ' · not a work day'}`, `
       <input type="date" id="date" value="${o.date}" style="width:170px">
       <button class="btn light" id="add-emp">${icon('plus')}Add employee</button>
       <a class="btn m-hide" href="/api/admin/report.csv?month=${o.date.slice(0, 7)}">${icon('download')}Export</a>`)}
@@ -2104,7 +2164,7 @@ async function viewOwnerDashboard(params) {
           <div class="kpis">
             ${kpi('Present', `${present}<span class="muted" style="font-size:1rem">/${total}</span>`, 'pink', pct(present, total))}
             ${kpi('On-time rate', `${pct(onTime, present)}%`, 'teal', pct(onTime, present))}
-            ${kpi('Pending requests', o.pending.leaves + o.pending.rewards, 'lime', Math.min(100, (o.pending.leaves + o.pending.rewards) * 20))}
+            ${kpi('Pending requests', o.pending.leaves + o.pending.rewards + o.pending.corrections, 'lime', Math.min(100, (o.pending.leaves + o.pending.rewards + o.pending.corrections) * 20))}
           </div>
         </div>
 
@@ -2309,8 +2369,16 @@ function addEmployeeModal() {
       <label class="f">Department<select name="department"><option value="">—</option>${(rules().departments || []).map((d) => `<option ${false ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
       <label class="f">Birthday <span class="muted tiny">(optional)</span><input type="date" name="birthday" value="${''}"></label>
       <label class="toggle full"><input type="checkbox" name="remote_allowed" >Allow remote check-in (shoots, client visits, WFH)</label>
+
+      <div class="f full"><span>Pay &amp; leave <span class="muted tiny">(optional: used for payroll and leave balance)</span></span>
+        <div class="form-grid three">
+          <label class="f">Monthly salary<input type="number" name="salary" min="0" step="any" inputmode="decimal" value="" placeholder="e.g. 12000"></label>
+          <label class="f">Annual leave/yr<input type="number" name="annual_leave" min="0" max="365" value="" placeholder="${rules().annual_leave_days ?? 21}"></label>
+          <label class="f">Sick leave/yr<input type="number" name="sick_leave" min="0" max="365" value="" placeholder="${rules().sick_leave_days ?? 7}"></label>
+        </div></div>
       <div class="f full"><span>Role</span><div class="choice"><label><input type="radio" name="role" value="employee" checked>${icon('user')}Employee</label>
-        <label><input type="radio" name="role" value="owner">${icon('key')}Owner / manager</label></div></div></div>`,
+        <label><input type="radio" name="role" value="lead" >${icon('team')}Team lead <span class="muted tiny">approves their department</span></label>
+        <label><input type="radio" name="role" value="owner" >${icon('key')}Owner</label></div></div></div>`,
     submit: 'Add employee',
     onSubmit: async (data) => {
       await api('/admin/users', { method: 'POST', body: { ...data, remote_allowed: !!data.remote_allowed } });
@@ -2333,7 +2401,7 @@ async function viewStaff(params) {
   let show = params.get('show') || 'active';
   let q = '';
   $('#app').innerHTML = `
-    ${pageHead('Staff', `${users.filter((u) => u.active && u.role === 'employee').length} active employees`, `<button class="btn" id="add">${icon('plus')}Add employee</button>`)}
+    ${pageHead('Staff', `${users.filter((u) => u.active && u.role !== 'owner').length} active employees`, `<button class="btn" id="add">${icon('plus')}Add employee</button>`)}
     <div class="card" style="margin-bottom:16px"><div class="row wrap between">
       <div class="input-icon" style="flex:1;min-width:200px;max-width:360px">${icon('search')}<input id="q" placeholder="Search by name, job, department"></div>
       <div class="seg" id="show">${['active', 'inactive', 'all'].map((s) => `<button type="button" data-s="${s}" class="${s === show ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div>
@@ -2348,22 +2416,23 @@ async function viewStaff(params) {
           .map(
             (u) => `<div class="card" style="margin:0">
               <div class="row">${avatar(u.name, 'lg')}<div style="min-width:0;flex:1"><strong style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(u.name)}</strong>
-                <span class="muted small">${u.role === 'owner' ? 'Owner' : esc(u.job_title || 'Employee')}</span></div>
+                <span class="muted small">${u.role === 'owner' ? 'Owner' : u.role === 'lead' ? `⭐ Team lead${u.job_title ? ` · ${esc(u.job_title)}` : ''}` : esc(u.job_title || 'Employee')}</span></div>
                 ${u.active ? '<span class="chip lime"><span class="dot"></span>Active</span>' : '<span class="chip slate">Inactive</span>'}</div>
               <div class="muted small mt row wrap" style="gap:14px"><span class="row" style="gap:6px">${icon('at')}${esc(u.username)}</span>${u.phone ? `<span class="row" style="gap:6px">${icon('phone')}${esc(u.phone)}</span>` : ''}</div>
               ${u.department || u.remote_allowed ? `<div class="chips mt">${u.department ? `<span class="chip dept-chip">${esc(u.department)}</span>` : ''}${u.remote_allowed ? '<span class="chip sky">🌍 Remote OK</span>' : ''}</div>` : ''}
-              ${u.role === 'employee' ? `<div class="chips mt">${['mobile', 'desktop'].map((k) => {
+              ${u.role !== 'owner' ? `<div class="chips mt">${['mobile', 'desktop'].map((k) => {
                 const d = (u.devices || []).find((x) => x.kind === k);
                 const em = k === 'mobile' ? '📱' : '💻';
                 return d
                   ? `<span class="chip teal" title="Linked ${relTime(d.bound_at)}${d.last_seen_at ? ` · last used ${relTime(d.last_seen_at)}` : ''}">${em} ${esc(d.label || 'Linked')}</span>`
                   : `<span class="chip">${em} ${k === 'mobile' ? 'No phone yet' : 'No laptop yet'}</span>`;
               }).join('')}${Number(u.device_blocks) ? `<span class="chip pink" title="Blocked login attempts in the last 30 days">⚠️ ${u.device_blocks} blocked</span>` : ''}</div>` : ''}
+              ${u.role !== 'owner' && u.salary == null ? `<div class="chips mt"><button type="button" class="chip amber" data-edit="${u.id}">💰 Add salary for payroll</button></div>` : ''}
               ${u.balances ? `<div class="chips mt"><span class="chip lime">${u.balances.green} green</span><span class="chip pink">${u.balances.month.red} red</span><span class="chip dark">${u.balances.month.black} black</span></div>` : ''}
               <div class="row mt" style="gap:6px">
-                ${u.role === 'employee' ? `<a class="btn sm" href="#/staff?id=${u.id}">${icon('activity')}Profile</a>` : ''}
+                ${u.role !== 'owner' ? `<a class="btn sm" href="#/staff?id=${u.id}">${icon('activity')}Profile</a>` : ''}
                 <button class="btn sm light" data-edit="${u.id}">${icon('pen')}Edit</button>
-                ${u.role === 'employee' && (u.devices || []).length ? `<button class="icon-btn sm" data-reset-dev="${u.id}" aria-label="Reset device" title="Reset device">${icon('phoneLock')}</button>` : ''}
+                ${u.role !== 'owner' && (u.devices || []).length ? `<button class="icon-btn sm" data-reset-dev="${u.id}" aria-label="Reset device" title="Reset device">${icon('phoneLock')}</button>` : ''}
                 ${u.id !== me.id ? `<button class="icon-btn sm" data-toggle="${u.id}" aria-label="${u.active ? 'Deactivate' : 'Activate'}" title="${u.active ? 'Deactivate' : 'Activate'}">${icon(u.active ? 'ban' : 'check')}</button>` : ''}
               </div></div>`,
           )
@@ -2421,7 +2490,16 @@ function editEmployee(u) {
       <label class="f">Birthday <span class="muted tiny">(optional)</span><input type="date" name="birthday" value="${esc(u.birthday || '')}"></label>
       <label class="toggle full"><input type="checkbox" name="remote_allowed" ${u.remote_allowed ? 'checked' : ''}>Allow remote check-in (shoots, client visits, WFH)</label>
       <label class="f">Absences counted from<input type="date" name="start_date" value="${esc(u.start_date)}"></label>
-      <label class="f">New password <span class="muted tiny">(leave empty to keep)</span><input name="password" type="text" minlength="6" autocomplete="off"></label></div>`,
+      <label class="f">New password <span class="muted tiny">(leave empty to keep)</span><input name="password" type="text" minlength="6" autocomplete="off"></label>
+      <div class="f full"><span>Pay &amp; leave <span class="muted tiny">(optional: used for payroll and leave balance)</span></span>
+        <div class="form-grid three">
+          <label class="f">Monthly salary<input type="number" name="salary" min="0" step="any" inputmode="decimal" value="${u.salary ?? ''}" placeholder="e.g. 12000"></label>
+          <label class="f">Annual leave/yr<input type="number" name="annual_leave" min="0" max="365" value="${u.annual_leave ?? ''}" placeholder="${rules().annual_leave_days ?? 21}"></label>
+          <label class="f">Sick leave/yr<input type="number" name="sick_leave" min="0" max="365" value="${u.sick_leave ?? ''}" placeholder="${rules().sick_leave_days ?? 7}"></label>
+        </div></div>
+      ${u.id === me.id ? '' : `<div class="f full"><span>Role</span><div class="choice"><label><input type="radio" name="role" value="employee" ${u.role === 'employee' ? 'checked' : ''}>${icon('user')}Employee</label>
+        <label><input type="radio" name="role" value="lead" ${u.role === 'lead' ? 'checked' : ''}>${icon('team')}Team lead <span class="muted tiny">approves their department</span></label>
+        <label><input type="radio" name="role" value="owner" ${u.role === 'owner' ? 'checked' : ''}>${icon('key')}Owner</label></div></div>`}</div>`,
     onSubmit: async (data) => {
       if (!data.password) delete data.password;
       data.remote_allowed = !!data.remote_allowed;
@@ -2474,7 +2552,7 @@ async function viewPoints() {
   const { params } = parseHash();
   const [users, log, s] = await Promise.all([api('/admin/users'), api('/admin/points'), api('/admin/settings')]);
   cachedRules = s;
-  const staff = users.filter((u) => u.role === 'employee' && u.active);
+  const staff = users.filter((u) => u.role !== 'owner' && u.active);
   const pre = params.get('user');
   $('#app').innerHTML = `
     ${pageHead('Points', 'Reward great work or record penalties. Every change needs a reason.')}
@@ -2551,20 +2629,21 @@ function statusSeg(base, active, opts) {
     .join('')}</div>`;
 }
 
-async function viewLeaveRequests(params) {
+async function viewLeaveRequests(params, base = 'leaves') {
   const status = params.get('status') ?? 'pending';
   const list = await api(`/admin/leaves${status ? `?status=${status}` : ''}`);
   $('#app').innerHTML = `
-    ${pageHead('Leave requests', 'Approved leave removes absences for those days.', statusSeg('leaves', status, ['pending', 'approved', 'rejected', 'cancelled']))}
+    ${pageHead(me.role === 'lead' ? `Team leave · ${esc(me.department || '')}` : 'Leave requests', 'Approved leave removes absences for those days.', statusSeg(base, status, ['pending', 'approved', 'rejected', 'cancelled']))}
     <div class="cards-grid">${
       list.length
         ? list
             .map(
               (l) => `<div class="card" style="margin:0">
-                <div class="row">${avatar(l.user_name)}<div class="grow" style="flex:1;min-width:0"><strong>${esc(l.user_name)}</strong><div class="tiny muted">${relTime(l.created_at)}</div></div>${chip(REQ, l.status)}</div>
-                <div class="tile amber mt" style="min-height:auto"><div class="row between"><div><div class="t-sub">From → To</div><strong>${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}</strong></div>
+                <div class="row">${avatar(l.user_name)}<div class="grow" style="flex:1;min-width:0"><strong>${esc(l.user_name)}</strong><div class="tiny muted">${l.department ? `${esc(l.department)} · ` : ''}${relTime(l.created_at)}</div></div>${chip(REQ, l.status)}</div>
+                <div class="tile ${l.type === 'sick' ? 'sky' : l.type === 'unpaid' ? 'slate' : 'amber'} mt" style="min-height:auto"><div class="row between"><div><div class="t-sub">${LEAVE_TYPES[l.type]?.[0] || ''} ${LEAVE_TYPES[l.type]?.[1] || 'Leave'}</div><strong>${fmtDate(l.from_date)} → ${fmtDate(l.to_date)}</strong></div>
                   <div class="t-num num">${daysBetween(l.from_date, l.to_date) + 1}d</div></div></div>
                 <p class="small mt" style="color:var(--ink-2)">${l.reason ? esc(l.reason) : '<span class="muted">No reason given</span>'}</p>
+                ${l.decided_by_name && l.status !== 'pending' ? `<p class="tiny muted">${l.status === 'approved' ? 'Approved' : 'Decided'} by ${esc(l.decided_by_name)}</p>` : ''}
                 ${l.status === 'pending' ? `<div class="row mt"><button class="btn sm green" data-id="${l.id}" data-d="approve">${icon('check')}Approve</button>
                   <button class="btn sm light" data-id="${l.id}" data-d="reject">${icon('x')}Reject</button></div>` : ''}
               </div>`,
@@ -2642,11 +2721,12 @@ async function viewReport(params) {
     </div>
     <div class="card">${
       rep.rows.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Present</th><th>Early</th><th>On time</th><th>Late</th><th>Leave</th><th>Green</th><th>Red</th><th>Black</th><th>Deduction</th></tr></thead><tbody>
+        ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Present</th><th>Early</th><th>On time</th><th>Late</th><th>Leave</th><th>Hours</th><th>Green</th><th>Red</th><th>Black</th><th>Deduction</th></tr></thead><tbody>
           ${rep.rows
             .map(
               (r) => `<tr><td><a href="#/staff?id=${r.user_id}&month=${month}" style="text-decoration:none" class="row">${avatar(r.name, 'sm')}<span><strong>${esc(r.name)}</strong>${r.active ? '' : ' <span class="chip slate">Inactive</span>'}<div class="tiny muted">${esc(r.department || '')}</div></span></a></td>
                 <td class="num">${r.days_present}</td><td class="num">${r.early}</td><td class="num">${r.on_time}</td><td class="num">${r.late}</td><td class="num">${r.leave_days}</td>
+                <td class="num nowrap">${fmtHours(r.worked_minutes)}${r.overtime_minutes ? `<div class="tiny" style="color:var(--green)">+${fmtHours(r.overtime_minutes)} OT</div>` : ''}</td>
                 <td><span class="chip lime num">${r.green_month}</span></td><td><span class="chip pink num">${r.red}</span></td><td><span class="chip dark num">${r.black}</span></td>
                 <td class="num strong">${money(r.total_deduction)}</td></tr>`,
             )
@@ -2723,6 +2803,36 @@ async function viewSettings() {
           <label class="tile teal"><span class="t-title">🎁 Min. points per reward</span><input type="number" name="min_reward_points" value="${s.min_reward_points}" min="1" required></label>
         </div>`)}
 
+      ${sec('hours', '🕘', 'Working hours & schedules', `${s.daily_hours} h/day · overtime ×${s.overtime_rate}${Object.keys(s.dept_schedules || {}).length ? ` · ${Object.keys(s.dept_schedules).length} custom schedule${Object.keys(s.dept_schedules).length === 1 ? '' : 's'}` : ''}`,
+        `<div class="form-grid two">
+          <label class="f">Work hours per day <span class="muted tiny">(beyond this = overtime)</span><input type="number" name="daily_hours" value="${s.daily_hours}" min="1" max="24" step="0.5" required></label>
+          <label class="f">Overtime pay rate <span class="muted tiny">(× hourly rate)</span><input type="number" name="overtime_rate" value="${s.overtime_rate}" min="0" max="10" step="0.05" required></label>
+        </div>
+        <div class="f mt"><span>Department schedules <span class="muted tiny">Give a team its own hours and days (e.g. video crews starting later). Others follow the company times above.</span></span>
+          <div class="grid" style="gap:8px" id="dept-sch">${s.departments.map((dep) => {
+            const own = (s.dept_schedules || {})[dep];
+            const v = own || { early_start: s.early_start, early_end: s.early_end, late_after: s.late_after, very_late_after: s.very_late_after, close: s.close, work_days: s.work_days, daily_hours: s.daily_hours };
+            const t = (k, label) => `<label class="f"><span>${label}</span><input type="time" data-k="${k}" value="${v[k]}"></label>`;
+            return `<details class="dept-sch" data-dept="${esc(dep)}" ${own ? 'open' : ''}>
+              <summary><span class="chip dept-chip">${esc(dep)}</span><span class="muted small grow">${own ? `${fmtTime(own.early_start)}–${fmtTime(own.close)} · ${own.work_days.length} days · ${own.daily_hours} h` : 'Company schedule'}</span>
+                <label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" data-own ${own ? 'checked' : ''}></label></summary>
+              <div class="form-grid three mt">${t('early_start', 'Early from')}${t('early_end', 'Early until')}${t('late_after', 'Late after')}${t('very_late_after', 'Very late after')}${t('close', 'Closes')}
+                <label class="f"><span>Hours/day</span><input type="number" data-k="daily_hours" value="${v.daily_hours}" min="1" max="24" step="0.5"></label></div>
+              <div class="choice days mt">${DAYS.map((d, i) => `<label><input type="checkbox" data-wd value="${i}" ${v.work_days.includes(i) ? 'checked' : ''}>${d.slice(0, 3)}</label>`).join('')}</div>
+            </details>`;
+          }).join('')}</div></div>`)}
+
+      ${sec('leave', '🏖️', 'Leave & payroll', `${s.annual_leave_days} annual · ${s.sick_leave_days} sick days a year`,
+        `<div class="form-grid two">
+          <label class="f">Annual leave days per year<input type="number" name="annual_leave_days" value="${s.annual_leave_days}" min="0" max="365" required></label>
+          <label class="f">Sick leave days per year<input type="number" name="sick_leave_days" value="${s.sick_leave_days}" min="0" max="365" required></label>
+        </div>
+        <p class="muted tiny" style="margin-top:6px">You can give someone a different allowance from Staff → Edit. Unpaid leave has no limit and is deducted from salary (salary ÷ work days in the month).</p>
+        <div class="row between mt" style="gap:14px;align-items:flex-start">
+          <div><strong>Add paid rewards to the payslip</strong><p class="muted small" style="margin-top:4px">Off: rewards are paid separately (InstaPay, wallet, cash) and only shown on the slip. On: they're added to net pay.</p></div>
+          <label class="toggle"><input type="checkbox" name="payroll_add_rewards" ${s.payroll_add_rewards ? 'checked' : ''}></label></div>
+        <div class="row wrap mt" style="gap:8px"><a class="btn sm light" href="#/payroll">${icon('receipt')}Open payroll</a><a class="btn sm light" href="#/holidays">${icon('party')}Official holidays</a></div>`)}
+
       ${sec('team', '🤝', 'Team & culture', `${s.departments.length} departments · ${s.kudos_daily_limit} kudos/day`,
         `<div class="f"><span>Departments</span><div class="chips" id="depts">${s.departments.map((d) => `<span class="chip dept-chip" data-dept="${esc(d)}">${esc(d)} <button type="button" class="icon-btn xs ghost" style="width:20px;height:20px" aria-label="Remove">${icon('x')}</button></span>`).join('')}</div>
           <div class="row mt"><input id="new-dept" placeholder="Add a department, e.g. SEO"><button class="btn sm light" type="button" id="add-dept">${icon('plus')}Add</button></div></div>
@@ -2735,6 +2845,16 @@ async function viewSettings() {
         `<div class="row between" style="gap:14px;align-items:flex-start">
           <div><strong>Lock employees to their devices</strong><p class="muted small" style="margin-top:4px">Each employee can use one phone and one laptop (the first ones they sign in from), and a device can't be shared between employees. Owners can sign in from anywhere.</p></div>
           <label class="toggle"><input type="checkbox" name="device_lock" ${s.device_lock ? 'checked' : ''}></label></div>`)}
+
+      ${sec('data', '💾', 'Reports & backup', s.weekly_summary ? 'Weekly summary every Thursday · Excel backup' : 'Weekly summary off · Excel backup',
+        `<div class="row between" style="gap:14px;align-items:flex-start">
+          <div><strong>Weekly summary notification</strong><p class="muted small" style="margin-top:4px">Every Thursday afternoon: attendance rate, late arrivals, absences, the week's stars and what's waiting for you.</p></div>
+          <label class="toggle"><input type="checkbox" name="weekly_summary" ${s.weekly_summary ? 'checked' : ''}></label></div>
+        <div class="row wrap mt" style="gap:8px">
+          <button class="btn sm light" type="button" id="send-weekly">${icon('bell')}Send me this week's summary now</button>
+          <a class="btn sm" href="/api/admin/export.xlsx">${icon('download')}Download full backup (Excel)</a>
+          <a class="btn sm light" href="#/audit">${icon('list')}Activity log</a></div>
+        <p class="muted tiny" style="margin-top:8px">The backup has every table (staff, attendance, points, leave, fixes, rewards, kudos, holidays, settings) on its own sheet. Passwords are never included.</p>`)}
 
       ${sec('company', '🏢', 'Company', `${esc(s.company_name)} · ${esc(s.currency)} · ${esc(s.timezone)}`,
         `<div class="form-grid">
@@ -2897,8 +3017,14 @@ async function viewSettings() {
       office_lng: d.office_lng === '' ? null : Number(d.office_lng),
       departments: $$('#depts [data-dept]').map((c) => c.dataset.dept),
       device_lock: !!form.device_lock.checked,
+      payroll_add_rewards: !!form.payroll_add_rewards.checked,
+      weekly_summary: !!form.weekly_summary.checked,
+      dept_schedules: Object.fromEntries($$('#dept-sch [data-dept]').filter((el) => $('[data-own]', el).checked).map((el) => [el.dataset.dept, {
+        ...Object.fromEntries($$('[data-k]', el).map((i) => [i.dataset.k, i.dataset.k === 'daily_hours' ? Number(i.value) : i.value])),
+        work_days: $$('[data-wd]:checked', el).map((c) => Number(c.value)),
+      }])),
     };
-    for (const k of ['radius_m', 'max_accuracy_m', 'very_late_reds', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'kudos_daily_limit', 'kudos_green']) body[k] = Number(body[k]);
+    for (const k of ['radius_m', 'max_accuracy_m', 'very_late_reds', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'kudos_daily_limit', 'kudos_green', 'daily_hours', 'overtime_rate', 'annual_leave_days', 'sick_leave_days']) body[k] = Number(body[k]);
     return act(btn, async () => {
       const saved = await api('/admin/settings', { method: 'PUT', body });
       company = saved.company_name;
@@ -2914,6 +3040,25 @@ async function viewSettings() {
       if (saved.office_lat != null) confetti({ count: 60 });
     }, msg);
   };
+  $$('#dept-sch [data-own]').forEach((c) => c.addEventListener('change', () => {
+    if (c.checked) c.closest('details').open = true;
+  }));
+  $('#send-weekly').onclick = (e) => act(e.currentTarget, async () => {
+    const r = await api('/admin/weekly-summary', { method: 'POST', body: {} });
+    const w = r.summary;
+    modal({
+      title: '📊 This week at a glance',
+      sub: `${fmtDate(w.from)} → ${fmtDate(w.to)}${r.sent ? ' · also sent to your devices' : ' · turn on notifications in Account to get it as a push'}`,
+      body: `<div class="grid g2">
+        ${tile('teal', 'Attendance', `${w.rate}%`, `${w.present}/${w.expected} check-ins`, { big: true, arrow: false })}
+        ${tile('pink', 'Late', w.late, 'arrivals', { big: true, arrow: false })}
+        ${tile('dark', 'Absences', w.absences, 'black points', { big: true, arrow: false })}
+        ${tile('amber', 'Waiting', w.pending.leaves + w.pending.rewards + w.pending.corrections, 'requests', { big: true, arrow: false })}</div>
+        ${w.stars.length ? `<p class="strong mt">⭐ Stars of the week</p><div class="chips mt">${w.stars.map((x) => `<span class="chip lime">${esc(x.name)} · +${x.green}</span>`).join('')}</div>` : ''}`,
+      submit: 'Nice',
+      onSubmit: async () => {},
+    });
+  });
   $('#save-loc').onclick = (e) => {
     if (!form.office_lat.value) return toast('Pick the office on the map first', 'error');
     save(e.currentTarget, 'Office location saved. Staff can check in now 🎉');
@@ -2922,6 +3067,329 @@ async function viewSettings() {
     e.preventDefault();
     save(e.submitter, 'Settings saved');
   };
+}
+
+// ---------- Attendance fixes ----------
+
+async function viewMyCorrections() {
+  const today = localISODate();
+  const prev = (() => {
+    const x = toDate(`${today.slice(0, 7)}-01`);
+    x.setUTCMonth(x.getUTCMonth() - 1);
+    return x.toISOString().slice(0, 7);
+  })();
+  const [list, h1, h2] = await Promise.all([api('/me/corrections'), api(`/me/history?month=${thisMonth()}`), api(`/me/history?month=${prev}`)]);
+  const min = (() => {
+    const x = toDate(today);
+    x.setUTCDate(x.getUTCDate() - 30);
+    return x.toISOString().slice(0, 10);
+  })();
+  const pendingDays = new Set(list.filter((c) => c.status === 'pending').map((c) => c.work_date));
+  // Suggestions: recent days with a missing check-out, or recorded as absent.
+  const att = [...h1.attendance, ...h2.attendance];
+  const pts = [...h1.points, ...h2.points];
+  const suggest = [
+    ...att.filter((a) => !a.check_out_time && a.work_date < today && a.work_date >= min).map((a) => ({ d: a.work_date, kind: 'out', in: a.check_in_time })),
+    ...pts.filter((p) => p.source === 'absent' && p.work_date >= min).map((p) => ({ d: p.work_date, kind: 'in' })),
+  ].filter((x) => !pendingDays.has(x.d)).sort((a, b) => b.d.localeCompare(a.d)).slice(0, 6);
+
+  $('#app').innerHTML = `
+    ${pageHead('Fix attendance 🛠️', 'Forgot to check in or out? Ask your manager to fix it. Approved fixes remove the absence.')}
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><h2>New request</h2></div>
+        ${suggest.length ? `<p class="list-label" style="margin-top:0">Needs fixing</p><div class="chips" id="suggest" style="margin-bottom:14px">${suggest
+          .map((x, i) => `<button type="button" class="chip ${x.kind === 'in' ? 'dark' : 'amber'}" data-i="${i}">${x.kind === 'in' ? '⚫' : '⏱️'} ${fmtDate(x.d)} · ${x.kind === 'in' ? 'absent' : 'no check-out'}</button>`)
+          .join('')}</div>` : ''}
+        <form id="fix" class="grid" style="gap:14px">
+          <label class="f">Day<input type="date" name="work_date" min="${min}" max="${today}" value="${suggest[0]?.d || today}" required></label>
+          <div class="form-grid two">
+            <label class="f">Check-in time<input type="time" name="check_in_time" value="${suggest[0]?.kind === 'out' ? '' : rules().early_end || '09:00'}"></label>
+            <label class="f">Check-out time<input type="time" name="check_out_time"></label>
+          </div>
+          <p class="muted tiny" id="fix-hint" style="margin-top:-6px">Leave check-in empty if you only forgot to check out.</p>
+          <label class="f">What happened?<textarea name="reason" maxlength="500" rows="2" required placeholder="e.g. My phone died when I arrived"></textarea></label>
+          <button class="btn xl block" type="submit">${icon('wrench')}Send to my manager</button>
+        </form>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>My requests</h2><span class="chip">${list.length}</span></div>
+        ${list.length ? `<div class="list">${list.map((c) => `<div class="list-item"><span class="avatar sm ${REQ[c.status][1]}">${icon('wrench')}</span>
+            <div class="grow"><strong>${fmtDate(c.work_date)}</strong><span>${[c.check_in_time && `In ${fmtTime(c.check_in_time)}`, c.check_out_time && `Out ${fmtTime(c.check_out_time)}`].filter(Boolean).join(' · ')} · ${esc(c.reason)}</span></div>
+            ${chip(REQ, c.status)}${c.status === 'pending' ? `<button class="btn sm light" data-cancel="${c.id}">Cancel</button>` : ''}</div>`).join('')}</div>`
+          : empty('wrench', 'No fixes requested. Nice and tidy!')}
+      </div>
+    </div>`;
+  const form = $('#fix');
+  $$('#suggest [data-i]').forEach((b) => (b.onclick = () => {
+    const x = suggest[b.dataset.i];
+    form.work_date.value = x.d;
+    form.check_in_time.value = x.kind === 'out' ? '' : rules().early_end || '09:00';
+    form.check_out_time.value = '';
+    $('#fix-hint').textContent = x.kind === 'out' ? `You checked in at ${fmtTime(x.in)}. Enter when you left.` : 'Enter when you actually arrived (and left, if you remember).';
+    (x.kind === 'out' ? form.check_out_time : form.check_in_time).focus();
+    $$('#suggest .chip').forEach((c) => c.classList.toggle('on', c === b));
+  }));
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    act(e.submitter, async () => {
+      const d = formData(form);
+      await api('/me/corrections', { method: 'POST', body: { ...d, check_in_time: d.check_in_time || null, check_out_time: d.check_out_time || null } });
+      route();
+    }, 'Sent. Your manager will review it');
+  };
+  $$('[data-cancel]').forEach((b) => (b.onclick = () => act(b, async () => {
+    await api(`/me/corrections/${b.dataset.cancel}/cancel`, { method: 'POST', body: {} });
+    route();
+  }, 'Request cancelled')));
+}
+
+async function viewCorrectionRequests(params, base = 'corrections') {
+  const status = params.get('status') ?? 'pending';
+  const list = await api(`/admin/corrections${status ? `?status=${status}` : ''}`);
+  $('#app').innerHTML = `
+    ${pageHead(me.role === 'lead' ? `Team fixes · ${esc(me.department || '')}` : 'Attendance fixes', 'Approving a missed check-in records it with the normal points and removes the absence.', statusSeg(base, status, ['pending', 'approved', 'rejected', 'cancelled']))}
+    <div class="cards-grid">${
+      list.length
+        ? list.map((c) => `<div class="card" style="margin:0">
+            <div class="row">${avatar(c.user_name)}<div class="grow" style="flex:1;min-width:0"><strong>${esc(c.user_name)}</strong><div class="tiny muted">${c.department ? `${esc(c.department)} · ` : ''}${relTime(c.created_at)}</div></div>${chip(REQ, c.status)}</div>
+            <div class="tile teal mt" style="min-height:auto"><div class="row between"><div><div class="t-sub">${c.check_in_time ? 'Missed check-in' : 'Missed check-out'}</div><strong>${fmtDate(c.work_date)}</strong></div>
+              <div class="t-num num" style="font-size:1.1rem;text-align:right">${c.check_in_time ? `In ${fmtTime(c.check_in_time)}` : ''}${c.check_in_time && c.check_out_time ? '<br>' : ''}${c.check_out_time ? `Out ${fmtTime(c.check_out_time)}` : ''}</div></div></div>
+            <p class="small mt" style="color:var(--ink-2)">${esc(c.reason)}</p>
+            ${c.decided_by_name && c.status !== 'pending' ? `<p class="tiny muted">By ${esc(c.decided_by_name)}</p>` : ''}
+            ${c.status === 'pending' ? `<div class="row mt"><button class="btn sm green" data-id="${c.id}" data-d="approve">${icon('check')}Approve</button>
+              <button class="btn sm light" data-id="${c.id}" data-d="reject">${icon('x')}Reject</button></div>` : ''}
+          </div>`).join('')
+        : `<div class="card" style="grid-column:1/-1">${empty('wrench', status === 'pending' ? 'No fixes waiting. All clear!' : 'Nothing here')}</div>`
+    }</div>`;
+  $$('[data-d]').forEach((b) => (b.onclick = () => act(b, async () => {
+    await api(`/admin/corrections/${b.dataset.id}/decision`, { method: 'POST', body: { decision: b.dataset.d } });
+    await refreshCounts();
+    route();
+  }, b.dataset.d === 'approve' ? 'Attendance fixed' : 'Request rejected')));
+}
+
+// ---------- Payroll & payslips ----------
+
+function payslipHtml(row, meta) {
+  const cur = meta.currency;
+  const m = (n) => money(n, cur);
+  const line = (label, value, cls = '', sub = '') => `<div class="slip-line ${cls}"><span>${label}${sub ? `<small>${sub}</small>` : ''}</span><b class="num">${value}</b></div>`;
+  return `<div class="card slip">
+    <div class="slip-head">${logoMark(38)}<div class="grow"><strong>${esc(meta.company_name || company)}</strong><span class="muted small">Payslip · ${fmtMonth(meta.month)}</span></div>
+      <span class="chip ${row.net_pay ? 'lime' : ''}">${esc(row.name)}</span></div>
+    <div class="slip-meta muted small">${esc(row.job_title || 'Team member')}${row.department ? ` · ${esc(row.department)}` : ''} · ${row.days_present}/${row.work_days} days present · ${fmtHours(row.worked_minutes)} worked</div>
+    ${row.salary ? '' : `<div class="notice amber mt">${icon('alert')}No salary on file yet. Deductions are shown, but net pay needs a salary.</div>`}
+    <div class="slip-body">
+      ${line('Base salary', m(row.salary))}
+      ${row.overtime_pay ? line('Overtime', `+ ${m(row.overtime_pay)}`, 'plus', `${row.overtime_hours} h × ${meta.overtime_rate}`) : ''}
+      ${row.rewards_paid && row.rewards_in_net ? line('Rewards paid', `+ ${m(row.rewards_paid)}`, 'plus', 'green points') : ''}
+      ${row.red_deduction ? line('Red penalties', `− ${m(row.red_deduction)}`, 'minus', `${row.red} × ${m(meta.red_value ?? row.red_deduction / row.red)}`) : ''}
+      ${row.black_deduction ? line('Absences', `− ${m(row.black_deduction)}`, 'minus', `${row.black} × ${m(meta.black_value ?? row.black_deduction / row.black)}`) : ''}
+      ${row.unpaid_deduction ? line('Unpaid leave', `− ${m(row.unpaid_deduction)}`, 'minus', `${row.unpaid_days} day${row.unpaid_days === 1 ? '' : 's'}`) : ''}
+      ${line('Net pay', m(row.net_pay), 'total')}
+      ${row.rewards_paid && !row.rewards_in_net ? `<p class="muted tiny" style="margin-top:8px">🎁 ${m(row.rewards_paid)} in rewards was paid separately this month.</p>` : ''}
+    </div>
+    <p class="muted tiny slip-foot">Generated ${fmtLong(localISODate())}. Red/black points are based on the check-in record; ask your manager if something looks wrong.</p>
+  </div>`;
+}
+
+async function viewPayslip(params) {
+  const month = params.get('month') || thisMonth();
+  const userId = Number(params.get('user')) || null;
+  let row;
+  let meta;
+  if (me.role === 'owner') {
+    const [pay, s] = await Promise.all([api(`/admin/payroll?month=${month}`), api('/admin/settings')]);
+    row = pay.rows.find((r) => r.user_id === userId);
+    meta = { ...pay, company_name: s.company_name, red_value: s.red_value, black_value: s.black_value };
+  } else {
+    meta = await api(`/me/payslip?month=${month}`);
+    row = meta.row;
+  }
+  if (!row) throw new Error('No payslip for that month');
+  $('#app').innerHTML = `
+    ${pageHead(me.role === 'owner' ? `Payslip · ${esc(row.name)}` : 'My payslip', fmtMonth(month), `${monthInput(month, me.role === 'owner' ? `#/payslip?user=${userId}` : '#/payslip')}
+      ${me.role === 'owner' ? `<a class="btn light" href="#/payroll?month=${month}">${icon('arrow')}Payroll</a>` : ''}
+      <button class="btn" onclick="window.print()">${icon('printer')}Print / PDF</button>`)}
+    <div class="slip-wrap">${payslipHtml(row, { ...meta, month })}</div>
+    ${month === thisMonth() ? `<p class="muted small no-print" style="text-align:center;margin-top:10px">This month isn't over yet: numbers update as the month goes on.</p>` : ''}`;
+  $('#month').max = thisMonth();
+}
+
+async function viewPayroll(params) {
+  const month = params.get('month') || thisMonth();
+  const pay = await api(`/admin/payroll?month=${month}`);
+  const rows = pay.rows.filter((r) => r.active);
+  const sum = (k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+  const m = (n) => money(Math.round(n), pay.currency);
+  const noSalary = rows.filter((r) => !r.salary).length;
+  $('#app').innerHTML = `
+    ${pageHead('Payroll 💸', `${fmtMonth(month)} · net pay = salary − deductions − unpaid leave + overtime${pay.rewards_in_net ? ' + rewards' : ''}`, `${monthInput(month, '#/payroll')}
+      <button class="btn light" onclick="window.print()">${icon('printer')}Print</button>
+      <a class="btn" href="/api/admin/payroll.csv?month=${month}">${icon('download')}Export CSV</a>`)}
+    ${noSalary ? `<a class="announce amber" href="#/employees" style="text-decoration:none;margin-bottom:16px"><span class="em">💰</span>
+      <div style="flex:1"><h3>${noSalary} ${noSalary === 1 ? 'person has' : 'people have'} no salary yet</h3><p>Add it from Staff → Edit to get their net pay.</p></div><span class="btn sm">Staff</span></a>` : ''}
+    <div class="grid g4" style="margin-bottom:16px">
+      ${tile('teal', 'Total net pay', m(sum('net_pay')), `${rows.length} people`, { arrow: false })}
+      ${tile('slate', 'Salaries', m(sum('salary')), 'base', { arrow: false })}
+      ${tile('pink', 'Deductions', m(sum('total_deduction') + sum('unpaid_deduction')), `${sum('red')} red · ${sum('black')} black${sum('unpaid_days') ? ` · ${sum('unpaid_days')} unpaid` : ''}`, { arrow: false })}
+      ${tile('lime', 'Overtime', m(sum('overtime_pay')), `${Math.round(sum('overtime_hours') * 10) / 10} h at ×${pay.overtime_rate}`, { arrow: false })}
+    </div>
+    <div class="card">${rows.length
+      ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Salary</th><th>Hours</th><th>Overtime</th><th>Red / black</th><th>Unpaid leave</th><th>Net pay</th><th class="no-print"></th></tr></thead><tbody>
+        ${rows.map((r) => `<tr><td><span class="row">${avatar(r.name, 'sm')}<span><strong>${esc(r.name)}</strong><div class="tiny muted">${esc(r.department || '')}</div></span></span></td>
+          <td class="num">${r.salary ? m(r.salary) : '<span class="chip amber">Not set</span>'}</td>
+          <td class="num nowrap">${fmtHours(r.worked_minutes)}</td>
+          <td class="num nowrap">${r.overtime_hours ? `${r.overtime_hours} h<div class="tiny" style="color:var(--green)">+ ${m(r.overtime_pay)}</div>` : '—'}</td>
+          <td class="num nowrap">${r.total_deduction ? `${r.red} / ${r.black}<div class="tiny" style="color:var(--red)">− ${m(r.total_deduction)}</div>` : '—'}</td>
+          <td class="num nowrap">${r.unpaid_days ? `${r.unpaid_days} d<div class="tiny" style="color:var(--red)">− ${m(r.unpaid_deduction)}</div>` : '—'}</td>
+          <td class="num strong nowrap">${m(r.net_pay)}</td>
+          <td class="no-print"><a class="btn sm light" href="#/payslip?user=${r.user_id}&month=${month}">${icon('receipt')}Slip</a></td></tr>`).join('')}
+        </tbody></table></div>`
+      : empty('receipt', 'No employees yet')}</div>`;
+}
+
+// ---------- Owner: holidays ----------
+
+async function viewHolidays(params) {
+  const year = params.get('year') || localISODate().slice(0, 4);
+  const today = localISODate();
+  const list = await api(`/holidays?year=${year}`);
+  const years = [Number(year) - 1, Number(year), Number(year) + 1];
+  $('#app').innerHTML = `
+    ${pageHead('Official holidays 🎉', 'Nobody is expected to check in on these days, so no absences are recorded.', `<div class="seg">${years.map((y) => `<a href="#/holidays?year=${y}" class="${String(y) === year ? 'on' : ''}">${y}</a>`).join('')}</div>`)}
+    <div class="split">
+      <div class="card">
+        <div class="card-head"><h2>Add a holiday</h2></div>
+        <form id="hol" class="grid" style="gap:14px">
+          <label class="f">Name<input name="name" maxlength="80" required placeholder="e.g. Eid al-Fitr"></label>
+          <div class="form-grid two">
+            <label class="f">From<input type="date" name="date" value="${year === today.slice(0, 4) ? today : `${year}-01-01`}" required></label>
+            <label class="f">To <span class="muted tiny">(optional)</span><input type="date" name="to_date"></label>
+          </div>
+          <button class="btn block" type="submit">${icon('plus')}Add holiday</button>
+        </form>
+        <div class="notice sky mt">${icon('calendar')}<div><strong>Egypt's fixed holidays</strong><div class="small">Coptic Christmas, 25 January, Sinai Liberation, Labour Day, 30 June, 23 July and 6 October. Eid and other Islamic holidays move each year, so add those by hand.</div>
+          <button class="btn sm light mt" type="button" id="preset">${icon('download')}Add the ${year} fixed holidays</button></div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>${year}</h2><span class="chip">${list.length} day${list.length === 1 ? '' : 's'}</span></div>
+        ${list.length ? `<div class="list">${list.map((h) => `<div class="list-item ${h.date < today ? 'past' : ''}">
+            <div class="leave-date ${h.date < today ? 'slate' : 'sky'}"><b>${toDate(h.date).getUTCDate()}</b><span>${toDate(h.date).toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })}</span></div>
+            <div class="grow"><strong>${esc(h.name)}</strong><span>${fmtDate(h.date, { weekday: 'long' })}${h.date >= today ? ` · in ${daysBetween(today, h.date)} days` : ''}</span></div>
+            <button class="icon-btn sm" data-del="${h.id}" data-name="${esc(h.name)}" aria-label="Remove">${icon('x')}</button></div>`).join('')}</div>`
+          : empty('party', 'No holidays for this year yet')}
+      </div>
+    </div>`;
+  $('#hol').onsubmit = (e) => {
+    e.preventDefault();
+    act(e.submitter, async () => {
+      const d = formData(e.target);
+      await api('/admin/holidays', { method: 'POST', body: { ...d, to_date: d.to_date || d.date } });
+      confetti({ count: 40 });
+      go(`#/holidays?year=${d.date.slice(0, 4)}`);
+      route();
+    }, 'Holiday added. Absences for it were cleared');
+  };
+  $('#preset').onclick = (e) => act(e.currentTarget, async () => {
+    await api('/admin/holidays/preset', { method: 'POST', body: { year: Number(year) } });
+    route();
+  }, `${year} holidays added`);
+  $$('[data-del]').forEach((b) => (b.onclick = () => confirmBox(`Remove ${b.dataset.name}?`, 'If this day already passed, it becomes a normal work day again and missed check-ins count as absences.', async () => {
+    await api(`/admin/holidays/${b.dataset.del}/delete`, { method: 'POST', body: {} });
+    route();
+  }, { submit: 'Remove' })));
+}
+
+// ---------- Owner: activity log ----------
+
+const AUDIT = {
+  'user.create': ['👤', 'added'], 'user.update': ['✏️', 'edited'], 'points.adjust': ['⭐', 'adjusted points for'],
+  'attendance.manual': ['🕘', 'recorded attendance for'], 'leave.approve': ['✅', 'approved leave for'], 'leave.reject': ['❌', 'rejected leave for'],
+  'reward.paid': ['💸', 'paid a reward to'], 'reward.reject': ['↩️', 'rejected a reward for'], 'correction.approve': ['🛠️', 'fixed attendance for'],
+  'correction.reject': ['❌', 'rejected a fix for'], 'settings.update': ['⚙️', 'changed settings'], 'holiday.add': ['🎉', 'added a holiday'],
+  'holiday.preset': ['🎉', 'added official holidays'], 'holiday.remove': ['🗑️', 'removed a holiday'], 'payroll.export': ['💰', 'exported payroll'],
+  'data.export': ['💾', 'downloaded a full backup'],
+};
+
+async function viewAudit() {
+  let rows = await api('/admin/audit');
+  const draw = () => {
+    let lastDay = '';
+    $('#audit').innerHTML = rows.length
+      ? rows.map((a) => {
+          const day = new Date(a.created_at).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+          const head = day !== lastDay ? `<p class="list-label">${day}</p>` : '';
+          lastDay = day;
+          const [em, verb] = AUDIT[a.action] || ['•', a.action];
+          return `${head}<div class="list-item"><span class="avatar sm slate">${em}</span>
+            <div class="grow"><strong>${esc(a.actor_name || 'System')}${a.actor_role === 'lead' ? ' <span class="chip tiny">lead</span>' : ''} <span style="font-weight:500">${verb}</span>${a.target_name ? ` ${esc(a.target_name)}` : ''}</strong>
+              ${a.detail ? `<span>${esc(a.detail)}</span>` : ''}</div>
+            <span class="tiny muted nowrap">${new Date(a.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</span></div>`;
+        }).join('')
+      : empty('list', 'No activity yet. Approvals, edits and exports will show up here.');
+  };
+  $('#app').innerHTML = `
+    ${pageHead('Activity log', 'Every change made by owners and team leads, newest first.', `<a class="btn" href="/api/admin/export.xlsx">${icon('download')}Full backup (Excel)</a>`)}
+    <div class="card"><div class="list" id="audit"></div>
+      <button class="btn light block mt" id="more-audit" ${rows.length < 100 ? 'hidden' : ''}>Load older</button></div>`;
+  draw();
+  $('#more-audit').onclick = (e) => act(e.currentTarget, async () => {
+    const older = await api(`/admin/audit?before=${rows[rows.length - 1].id}`);
+    rows = [...rows, ...older];
+    draw();
+    if (older.length < 100) e.currentTarget.hidden = true;
+  });
+}
+
+// ---------- Team lead: team board ----------
+
+async function viewTeam(params) {
+  const date = params.get('date') || '';
+  const o = await api(`/admin/overview${date ? `?date=${date}` : ''}`);
+  pending = o.pending;
+  renderShell('team');
+  const c = (st) => o.rows.filter((x) => x.status === st).length;
+  const present = o.rows.filter((x) => PRESENT.includes(x.status)).length;
+  const total = o.rows.length;
+  $('#app').innerHTML = `
+    ${pageHead(`My team${o.scope ? ` · ${esc(o.scope)}` : ''}`, `${fmtLong(o.date)}${o.holiday ? ` · 🎉 ${esc(o.holiday)}` : ''}`, `<input type="date" id="date" value="${o.date}" style="width:170px">`)}
+    ${o.scope ? '' : `<div class="notice amber" style="margin-bottom:16px">${icon('alert')}You don't have a department yet. Ask the owner to set one on your profile.</div>`}
+    <div class="grid g4" style="margin-bottom:16px">
+      ${tile('teal', 'Present', `${present}/${total}`, `${pct(present, total)}% of the team`, { big: true, arrow: false })}
+      ${tile('lime', 'Early', c('early'), 'green points earned', { big: true, arrow: false })}
+      ${tile('pink', 'Late', c('late') + c('very_late'), 'red penalties', { big: true, arrow: false })}
+      ${tile('amber', 'Waiting for you', o.pending.leaves + o.pending.corrections, `${o.pending.leaves} leave · ${o.pending.corrections} fix${o.pending.corrections === 1 ? '' : 'es'}`, { big: true, href: o.pending.corrections && !o.pending.leaves ? '#/team-fixes' : '#/team-leaves' })}
+    </div>
+    <div class="card"><div class="card-head"><h2>Attendance</h2>${o.mood.avg ? `<span class="chip">${MOODS[Math.round(o.mood.avg)][0]} mood ${o.mood.avg}</span>` : ''}</div>
+      ${o.rows.length ? `<div class="list">${o.rows.map((x) => `<a class="list-item" href="#/member?id=${x.id}" style="text-decoration:none">${avatar(x.name)}
+          <div class="grow"><strong>${esc(x.name)} ${x.mood ? `<i class="mood-inline">${MOODS[x.mood][0]}</i>` : ''}</strong><span>${esc(x.job_title || 'Team member')}${x.mode === 'remote' ? ' · 🌍 Remote' : ''}${x.worked_minutes ? ` · ${fmtHours(x.worked_minutes)}` : ''}</span></div>
+          <div class="tiny muted nowrap" style="text-align:right">${x.check_in_time ? `In ${fmtTime(x.check_in_time)}` : ''}${x.check_out_time ? `<br>Out ${fmtTime(x.check_out_time)}` : ''}</div>
+          ${chip(STATUS, x.status)}</a>`).join('')}</div>` : empty('users', 'Nobody in your department yet')}
+    </div>`;
+  $('#date').onchange = (e) => go(`#/team?date=${e.target.value}`);
+}
+
+async function viewMember(params) {
+  const id = Number(params.get('id'));
+  const [{ h, leaves, month }, d, people] = await Promise.all([viewHistory(params, id), api('/me/dashboard'), api('/people')]);
+  const p = people.find((x) => x.id === id) || { name: 'Team member' };
+  const b = h.balances;
+  $('#app').innerHTML = `
+    ${pageHead(esc(p.name), `${esc(p.job_title || 'Team member')} · ${fmtMonth(month)}`, monthInput(month, `#/member?id=${id}`))}
+    <div class="dash">
+      <div class="card"><div class="card-head"><h2>Summary</h2></div>
+        <div class="grid g2">
+          ${tile('teal', 'Days present', h.attendance.length, 'this month', { big: true, arrow: false })}
+          ${tile('lime', 'Green', b.month.green, `balance ${b.green}`, { big: true, arrow: false })}
+          ${tile('pink', 'Red', b.month.red, 'late arrivals', { big: true, arrow: false })}
+          ${tile('dark', 'Absences', b.month.black, 'black points', { big: true, arrow: false })}
+        </div></div>
+      <div class="card"><div class="card-head"><h2>Calendar</h2></div>
+        ${calendar(month, { attendance: h.attendance, points: h.points, leaves, workDays: d.rules.work_days, startDate: p.start_date, today: d.now.date })}</div>
+    </div>
+    ${historyLists(h)}`;
 }
 
 // ---------- Culture: kudos, wall, people, profiles ----------
@@ -3108,7 +3576,7 @@ async function viewPerson(params) {
   $('#app').innerHTML = `
     ${pageHead(isMe ? 'My Profile' : esc(p.name), isMe ? 'Your level, badges and kudos' : esc(p.job_title || 'Team member'),
       isMe ? `<a class="btn light" href="#/account">${icon('settings')}Account</a>` : `<button class="btn" data-kudos-to="${p.id}">${icon('heart')}Send kudos</button>
-      ${me.role === 'owner' && p.role === 'employee' ? `<a class="btn light" href="#/staff?id=${p.id}">${icon('activity')}Attendance</a>` : ''}`)}
+      ${me.role === 'owner' && p.role !== 'owner' ? `<a class="btn light" href="#/staff?id=${p.id}">${icon('activity')}Attendance</a>` : ''}`)}
     <div class="dash">
       <div class="stack-col">
         <div class="card">
