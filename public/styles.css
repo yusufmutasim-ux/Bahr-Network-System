@@ -855,3 +855,15 @@ button, a, label, .tile, .chip { touch-action: manipulation; }
 .save-bar.show { display: flex; animation: sheetUp .3s cubic-bezier(.2, .9, .3, 1); }
 .set-sec + .set-sec { margin-top: 0; }
 #settings { max-width: 980px; }
+
+/* ============ Theme switch animation ============ */
+/* Circular reveal: the new theme grows from the tapped button (JS animates the clip-path). */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-old(root) { z-index: 1; }
+::view-transition-new(root) { z-index: 2; }
+/* Fallback for browsers without View Transitions: cross-fade the colours. */
+.theme-fade, .theme-fade *, .theme-fade *::before, .theme-fade *::after {
+  transition: background-color .5s ease, color .5s ease, border-color .5s ease, fill .5s ease, stroke .5s ease, box-shadow .5s ease !important;
+}
+.spin-in { animation: spinIn .6s cubic-bezier(.2, 1.4, .4, 1); }
+@keyframes spinIn { from { transform: rotate(-140deg) scale(.3); opacity: 0; } }

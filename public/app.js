@@ -834,13 +834,43 @@ function isDark() {
   const t = document.documentElement.dataset.theme;
   return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
 }
-function setTheme(t) {
-  if (t === 'system') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = t;
-  store.set('theme', t);
-  paintThemeButtons();
+// Switches theme with a circular reveal growing from the tapped control (View Transitions API),
+// or a smooth colour cross-fade where that API isn't available.
+function setTheme(t, from = null) {
+  const root = document.documentElement;
+  const wasDark = isDark();
+  const apply = () => {
+    if (t === 'system') delete root.dataset.theme;
+    else root.dataset.theme = t;
+    store.set('theme', t);
+    paintThemeButtons();
+    $$('[data-theme-btn] svg, #theme-btn svg').forEach((svg) => svg.classList.add('spin-in'));
+  };
+  const willBeDark = t === 'system' ? matchMedia('(prefers-color-scheme: dark)').matches : t === 'dark';
+  if (willBeDark === wasDark || matchMedia('(prefers-reduced-motion: reduce)').matches) return apply();
+
+  const rect = from?.getBoundingClientRect?.();
+  const x = rect ? rect.left + rect.width / 2 : innerWidth / 2;
+  const y = rect ? rect.top + rect.height / 2 : innerHeight / 2;
+  const radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+
+  if (!document.startViewTransition) {
+    root.classList.add('theme-fade');
+    apply();
+    setTimeout(() => root.classList.remove('theme-fade'), 600);
+    return;
+  }
+  const vt = document.startViewTransition(apply);
+  vt.ready
+    .then(() => {
+      root.animate(
+        { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
+        { duration: 650, easing: 'cubic-bezier(.65, 0, .35, 1)', pseudoElement: '::view-transition-new(root)' },
+      );
+    })
+    .catch(() => {});
 }
-const toggleTheme = () => setTheme(isDark() ? 'light' : 'dark');
+const toggleTheme = (e) => setTheme(isDark() ? 'light' : 'dark', e?.currentTarget || e?.target?.closest?.('button') || null);
 function paintThemeButtons() {
   $$('[data-theme-btn]').forEach((b) => (b.innerHTML = icon(isDark() ? 'sun' : 'moon')));
   $('#theme-btn').innerHTML = icon(isDark() ? 'sun' : 'moon');
@@ -977,7 +1007,7 @@ function openMore() {
   }));
   $$('[data-more-act]', dlg).forEach((b) => (b.onclick = () => {
     dlg.close();
-    ({ search: openPalette, theme: toggleTheme, install: installApp, logout })[b.dataset.moreAct]();
+    ({ search: openPalette, theme: () => setTheme(isDark() ? 'light' : 'dark', $('[data-more]')), install: installApp, logout })[b.dataset.moreAct]();
   }));
   dlg.onclick = (e) => e.target === dlg && dlg.close();
   dlg.showModal();
@@ -1006,7 +1036,7 @@ document.addEventListener('click', (e) => {
   if (!t) return;
   if (t.dataset.go) go(t.dataset.go);
   else if ('palette' in t.dataset) openPalette();
-  else if ('themeBtn' in t.dataset) toggleTheme();
+  else if ('themeBtn' in t.dataset) setTheme(isDark() ? 'light' : 'dark', t);
   else if ('logout' in t.dataset) logout();
 });
 $('#theme-btn').onclick = toggleTheme;
@@ -1940,7 +1970,7 @@ async function viewAccount() {
       </div>
     </div>`;
   $$('#theme-seg [data-t]').forEach((b) => (b.onclick = () => {
-    setTheme(b.dataset.t);
+    setTheme(b.dataset.t, b);
     $$('#theme-seg button').forEach((x) => x.classList.toggle('on', x === b));
   }));
   const paintPush = () => {
