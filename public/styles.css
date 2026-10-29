@@ -280,6 +280,16 @@ input, select, textarea {
 textarea { height: auto; min-height: 90px; padding: 12px 14px; resize: vertical; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 20%, transparent); }
 input[type="checkbox"], input[type="radio"] { width: auto; height: auto; accent-color: var(--green); }
+/* iOS Safari: date/time fields ignore width, collapse when empty and centre their text. */
+input[type="date"], input[type="time"], input[type="month"], input[type="datetime-local"] {
+  -webkit-appearance: none; appearance: none; display: block; min-width: 0; max-width: 100%;
+  min-height: 44px; line-height: 44px; text-align: left;
+}
+input::-webkit-date-and-time-value { text-align: left; min-height: 1.4em; margin: 0; }
+input::-webkit-datetime-edit { padding: 0; }
+/* Side-by-side fields stay aligned even when one label wraps. */
+.form-grid label.f { justify-content: flex-end; min-width: 0; }
+.form-grid label.f .muted.tiny { font-weight: 500; }
 .form-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .form-grid .full { grid-column: 1 / -1; }
 .choice { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -747,9 +757,10 @@ button, a, label, .tile, .chip { touch-action: manipulation; }
 @media (max-width: 640px) {
   /* Attendance board rows: avatar | name | status, with times + action underneath. */
   #board .list-item {
-    display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; grid-template-areas: 'av name chip' 'av time act';
-    column-gap: 10px; row-gap: 4px; align-items: center;
+    display: grid; grid-template-columns: 38px minmax(0, 1fr) auto auto; grid-template-areas: 'av name chip act' 'av time time time';
+    column-gap: 8px; row-gap: 2px; align-items: center;
   }
+  #board .list-item > .tiny:empty { display: none; }
   #board .list-item > :nth-child(1) { grid-area: av; align-self: start; }
   #board .list-item > :nth-child(2) { grid-area: name; }
   #board .list-item > :nth-child(3) { grid-area: time; order: 0; width: auto; padding: 0; text-align: left !important; }
@@ -932,4 +943,40 @@ body::after { bottom: -300px; right: -240px; background: radial-gradient(circle,
   .slip-wrap { max-width: none; }
   .slip-line.total { background: #f1f5f4 !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .table-wrap { overflow: visible !important; }
+}
+
+/* ============ Phones: wide tables become cards ============ */
+@media (max-width: 640px) {
+  .table-wrap:has(> table.stack) { margin: 0; padding: 0; overflow: visible; }
+  table.stack thead { display: none; }
+  table.stack, table.stack tbody { display: block; }
+  table.stack tr {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px;
+    padding: 14px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-solid);
+  }
+  table.stack tr:last-child { margin-bottom: 0; }
+  table.stack td { display: block; padding: 0; border: 0; min-width: 0; white-space: normal; position: static !important; background: none !important; }
+  table.stack td:first-child { grid-column: 1 / -1; }
+  table.stack td[data-label]::before {
+    content: attr(data-label); display: block; margin-bottom: 2px;
+    font-size: .64rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+  }
+  table.stack td.td-total {
+    grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 12px; border-radius: 12px; background: var(--lime) !important; color: var(--lime-ink); font-size: 1.05rem;
+  }
+  table.stack td.td-total::before { margin: 0; color: inherit; opacity: .75; }
+  table.stack td.td-action { grid-column: 1 / -1; }
+  table.stack td.td-action .btn { width: 100%; justify-content: center; }
+  table.stack td:empty { display: none; }
+  /* Money in tiles: smaller so "25,250 EGP" stays on one line. */
+  .tile .t-num { white-space: nowrap; font-size: .9rem; }
+  .g4 .tile .t-foot { flex-wrap: wrap; gap: 6px; }
+}
+@media (max-width: 640px) {
+  /* Narrow tables (leaderboard): tighter cells, names may wrap instead of pushing columns off-screen. */
+  table:not(.stack) th, table:not(.stack) td { padding-inline: 6px; }
+  table:not(.stack) td .row strong { white-space: normal; }
+  table:not(.stack) td:has(.row) { white-space: normal; }
+  .rank { width: 22px; }
 }

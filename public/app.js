@@ -2001,11 +2001,11 @@ async function viewLeaderboard(params) {
   } else {
     body = lb.rows.length
       ? `${podium(lb.rows.slice(0, 3), (x) => x.green, 'green points')}
-        <div class="card"><div class="table-wrap"><table><thead><tr><th>#</th><th>Employee</th><th>Green</th><th>Red</th><th>Black</th><th>Early days</th><th>Present</th></tr></thead><tbody>
+        <div class="card"><div class="table-wrap"><table><thead><tr><th>#</th><th>Employee</th><th>Green</th><th>Red</th><th>Black</th><th class="m-hide">Early days</th><th class="m-hide">Present</th></tr></thead><tbody>
         ${lb.rows.map((x, i) => `<tr ${x.user_id === me.id ? 'style="background:var(--sunken)"' : ''}><td class="rank">${i + 1}</td>
           <td><a href="#/person?id=${x.user_id}" class="row" style="text-decoration:none">${avatar(x.name, 'sm')}<div><strong>${esc(x.name)}</strong><div class="tiny muted">${esc(x.department || x.job_title || 'Staff')}</div></div></a></td>
           <td><span class="chip lime num">${x.green}</span></td><td><span class="chip pink num">${x.red}</span></td><td><span class="chip dark num">${x.black}</span></td>
-          <td class="num">${x.early}</td><td class="num">${x.days_present}</td></tr>`).join('')}</tbody></table></div></div>`
+          <td class="num m-hide">${x.early}</td><td class="num m-hide">${x.days_present}</td></tr>`).join('')}</tbody></table></div></div>`
       : `<div class="card">${empty('trophy', 'No employees yet')}</div>`;
   }
   $('#app').innerHTML = `${pageHead('Leaderboard <span class="wave">🏆</span>', fmtMonth(month), `${tabs}${monthInput(month, `#/leaderboard?tab=${tab}`)}`)}${body}`;
@@ -2721,14 +2721,14 @@ async function viewReport(params) {
     </div>
     <div class="card">${
       rep.rows.length
-        ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Present</th><th>Early</th><th>On time</th><th>Late</th><th>Leave</th><th>Hours</th><th>Green</th><th>Red</th><th>Black</th><th>Deduction</th></tr></thead><tbody>
+        ? `<div class="table-wrap"><table class="stack"><thead><tr><th>Employee</th><th>Present</th><th>Early</th><th>On time</th><th>Late</th><th>Leave</th><th>Hours</th><th>Green</th><th>Red</th><th>Black</th><th>Deduction</th></tr></thead><tbody>
           ${rep.rows
             .map(
               (r) => `<tr><td><a href="#/staff?id=${r.user_id}&month=${month}" style="text-decoration:none" class="row">${avatar(r.name, 'sm')}<span><strong>${esc(r.name)}</strong>${r.active ? '' : ' <span class="chip slate">Inactive</span>'}<div class="tiny muted">${esc(r.department || '')}</div></span></a></td>
-                <td class="num">${r.days_present}</td><td class="num">${r.early}</td><td class="num">${r.on_time}</td><td class="num">${r.late}</td><td class="num">${r.leave_days}</td>
-                <td class="num nowrap">${fmtHours(r.worked_minutes)}${r.overtime_minutes ? `<div class="tiny" style="color:var(--green)">+${fmtHours(r.overtime_minutes)} OT</div>` : ''}</td>
-                <td><span class="chip lime num">${r.green_month}</span></td><td><span class="chip pink num">${r.red}</span></td><td><span class="chip dark num">${r.black}</span></td>
-                <td class="num strong">${money(r.total_deduction)}</td></tr>`,
+                <td class="num" data-label="Present">${r.days_present}</td><td class="num" data-label="Early">${r.early}</td><td class="num" data-label="On time">${r.on_time}</td><td class="num" data-label="Late">${r.late}</td><td class="num" data-label="Leave">${r.leave_days}</td>
+                <td class="num nowrap" data-label="Hours">${fmtHours(r.worked_minutes)}${r.overtime_minutes ? `<div class="tiny" style="color:var(--green)">+${fmtHours(r.overtime_minutes)} OT</div>` : ''}</td>
+                <td data-label="Green"><span class="chip lime num">${r.green_month}</span></td><td data-label="Red"><span class="chip pink num">${r.red}</span></td><td data-label="Black"><span class="chip dark num">${r.black}</span></td>
+                <td class="num strong td-total" data-label="Deduction">${money(r.total_deduction)}</td></tr>`,
             )
             .join('')}</tbody></table></div>`
         : empty('chart', 'No employees yet')
@@ -3237,15 +3237,15 @@ async function viewPayroll(params) {
       ${tile('lime', 'Overtime', m(sum('overtime_pay')), `${Math.round(sum('overtime_hours') * 10) / 10} h at ×${pay.overtime_rate}`, { arrow: false })}
     </div>
     <div class="card">${rows.length
-      ? `<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Salary</th><th>Hours</th><th>Overtime</th><th>Red / black</th><th>Unpaid leave</th><th>Net pay</th><th class="no-print"></th></tr></thead><tbody>
+      ? `<div class="table-wrap"><table class="stack"><thead><tr><th>Employee</th><th>Salary</th><th>Hours</th><th>Overtime</th><th>Red / black</th><th>Unpaid leave</th><th>Net pay</th><th class="no-print"></th></tr></thead><tbody>
         ${rows.map((r) => `<tr><td><span class="row">${avatar(r.name, 'sm')}<span><strong>${esc(r.name)}</strong><div class="tiny muted">${esc(r.department || '')}</div></span></span></td>
-          <td class="num">${r.salary ? m(r.salary) : '<span class="chip amber">Not set</span>'}</td>
-          <td class="num nowrap">${fmtHours(r.worked_minutes)}</td>
-          <td class="num nowrap">${r.overtime_hours ? `${r.overtime_hours} h<div class="tiny" style="color:var(--green)">+ ${m(r.overtime_pay)}</div>` : '—'}</td>
-          <td class="num nowrap">${r.total_deduction ? `${r.red} / ${r.black}<div class="tiny" style="color:var(--red)">− ${m(r.total_deduction)}</div>` : '—'}</td>
-          <td class="num nowrap">${r.unpaid_days ? `${r.unpaid_days} d<div class="tiny" style="color:var(--red)">− ${m(r.unpaid_deduction)}</div>` : '—'}</td>
-          <td class="num strong nowrap">${m(r.net_pay)}</td>
-          <td class="no-print"><a class="btn sm light" href="#/payslip?user=${r.user_id}&month=${month}">${icon('receipt')}Slip</a></td></tr>`).join('')}
+          <td class="num" data-label="Salary">${r.salary ? m(r.salary) : '<span class="chip amber">Not set</span>'}</td>
+          <td class="num nowrap" data-label="Hours">${fmtHours(r.worked_minutes)}</td>
+          <td class="num nowrap" data-label="Overtime">${r.overtime_hours ? `${r.overtime_hours} h<div class="tiny" style="color:var(--green)">+ ${m(r.overtime_pay)}</div>` : '—'}</td>
+          <td class="num nowrap" data-label="Red / black">${r.total_deduction ? `${r.red} / ${r.black}<div class="tiny" style="color:var(--red)">− ${m(r.total_deduction)}</div>` : '—'}</td>
+          <td class="num nowrap" data-label="Unpaid leave">${r.unpaid_days ? `${r.unpaid_days} d<div class="tiny" style="color:var(--red)">− ${m(r.unpaid_deduction)}</div>` : '—'}</td>
+          <td class="num strong nowrap td-total" data-label="Net pay">${m(r.net_pay)}</td>
+          <td class="no-print td-action"><a class="btn sm light" href="#/payslip?user=${r.user_id}&month=${month}">${icon('receipt')}Slip</a></td></tr>`).join('')}
         </tbody></table></div>`
       : empty('receipt', 'No employees yet')}</div>`;
 }
@@ -3266,7 +3266,7 @@ async function viewHolidays(params) {
           <label class="f">Name<input name="name" maxlength="80" required placeholder="e.g. Eid al-Fitr"></label>
           <div class="form-grid two">
             <label class="f">From<input type="date" name="date" value="${year === today.slice(0, 4) ? today : `${year}-01-01`}" required></label>
-            <label class="f">To <span class="muted tiny">(optional)</span><input type="date" name="to_date"></label>
+            <label class="f">Until<input type="date" name="to_date" value="${year === today.slice(0, 4) ? today : `${year}-01-01`}"></label>
           </div>
           <button class="btn block" type="submit">${icon('plus')}Add holiday</button>
         </form>
@@ -3282,6 +3282,11 @@ async function viewHolidays(params) {
           : empty('party', 'No holidays for this year yet')}
       </div>
     </div>`;
+  $('#hol').date.onchange = (e) => {
+    const to = $('#hol').to_date;
+    to.min = e.target.value;
+    if (!to.value || to.value < e.target.value) to.value = e.target.value;
+  };
   $('#hol').onsubmit = (e) => {
     e.preventDefault();
     act(e.submitter, async () => {
@@ -3325,7 +3330,7 @@ async function viewAudit() {
           const [em, verb] = AUDIT[a.action] || ['•', a.action];
           return `${head}<div class="list-item"><span class="avatar sm slate">${em}</span>
             <div class="grow"><strong>${esc(a.actor_name || 'System')}${a.actor_role === 'lead' ? ' <span class="chip tiny">lead</span>' : ''} <span style="font-weight:500">${verb}</span>${a.target_name ? ` ${esc(a.target_name)}` : ''}</strong>
-              ${a.detail ? `<span>${esc(a.detail)}</span>` : ''}</div>
+              ${a.detail ? `<span>${esc(a.action === 'settings.update' ? a.detail.replace(/_/g, ' ').replace(/\bdept\b/g, 'department').replace(/\bwd\b/, 'work days') : a.detail)}</span>` : ''}</div>
             <span class="tiny muted nowrap">${new Date(a.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</span></div>`;
         }).join('')
       : empty('list', 'No activity yet. Approvals, edits and exports will show up here.');
