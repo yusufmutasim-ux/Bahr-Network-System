@@ -879,3 +879,25 @@ kbd {
 .search .kbd-combo { margin-right: 4px; opacity: .85; }
 @media (max-width: 900px) { .search .kbd-combo { display: none; } }
 @media (hover: none) { .search .kbd-combo { display: none; } }
+
+/* ============ Performance ============ */
+/* Glass blur only where something scrolls underneath (top bar, bottom bar, overlays). Cards and buttons sit on
+   a smooth background where blur is invisible but costs a full re-render on every frame. */
+:root { --surface: rgba(255, 255, 255, .82); }
+:root[data-theme="dark"] { --surface: rgba(22, 31, 29, .86); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --surface: rgba(22, 31, 29, .86); } }
+.card, .icon-btn, .search, .sidebar-foot { backdrop-filter: none; -webkit-backdrop-filter: none; }
+
+/* Plain background (no fixed-attachment repaint on scroll); the soft glows come from the two blobs below. */
+body { background: linear-gradient(135deg, var(--bg), var(--bg-2)); background-attachment: scroll; }
+/* Blobs: radial gradients instead of blur(80px), moved with transform only (GPU-composited, no repaint). */
+body::before, body::after { filter: none; opacity: 1; width: 900px; height: 900px; will-change: transform; contain: strict; }
+body::before { background: radial-gradient(circle, var(--glow-1), transparent 65%); top: -380px; left: -360px; }
+body::after { background: radial-gradient(circle, var(--glow-2), transparent 65%); bottom: -420px; right: -360px; }
+
+/* While the theme switches, freeze every other animation/transition so the reveal gets the whole frame budget. */
+:root.theme-switching *, :root.theme-switching *::before, :root.theme-switching *::after {
+  animation-play-state: paused !important; transition: none !important;
+}
+body::before { top: -260px; left: -220px; background: radial-gradient(circle, var(--glow-1), transparent 70%); }
+body::after { bottom: -300px; right: -240px; background: radial-gradient(circle, var(--glow-2), transparent 70%); }

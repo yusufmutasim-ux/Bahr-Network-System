@@ -876,19 +876,22 @@ function setTheme(t, from = null) {
     return;
   }
   let vt;
+  root.classList.add('theme-switching');
   try {
     vt = document.startViewTransition(apply);
   } catch {
+    root.classList.remove('theme-switching');
     return apply();
   }
   vt.ready
     .then(() => {
       root.animate(
         { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
-        { duration: 650, easing: 'cubic-bezier(.65, 0, .35, 1)', pseudoElement: '::view-transition-new(root)' },
+        { duration: 520, easing: 'cubic-bezier(.4, 0, .2, 1)', pseudoElement: '::view-transition-new(root)' },
       );
     })
     .catch(() => {});
+  vt.finished.finally(() => root.classList.remove('theme-switching'));
 }
 const toggleTheme = (e) => setTheme(isDark() ? 'light' : 'dark', e?.currentTarget || e?.target?.closest?.('button') || null);
 function paintThemeButtons() {
