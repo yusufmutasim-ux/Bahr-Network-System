@@ -27,6 +27,7 @@
       const t = localStorage.getItem('bahr.theme');
       if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
       if (localStorage.getItem('bahr.sidebar') === 'collapsed') document.documentElement.classList.add('sidebar-collapsed');
+      if (localStorage.getItem('bahr.motion') === 'on') document.documentElement.classList.add('motion-on');
     } catch {}
   </script>
 </head>

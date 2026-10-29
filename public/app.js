@@ -401,7 +401,13 @@ const skeleton = () =>
 
 // ---------- Motion & delight ----------
 
-const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+// Device "reduce motion" setting, unless the user picked "Animations: Always on" in Account.
+let reduceMotion = store.get('motion') !== 'on' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+function setMotion(mode) {
+  store.set('motion', mode);
+  document.documentElement.classList.toggle('motion-on', mode === 'on');
+  reduceMotion = mode !== 'on' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
 const soundOn = () => store.get('sound', 'on') === 'on';
 
 // Lightweight canvas confetti in the brand palette.
@@ -849,7 +855,14 @@ function setTheme(t, from = null) {
     $$('[data-theme-btn] svg, #theme-btn svg').forEach((svg) => svg.classList.add('spin-in'));
   };
   const willBeDark = t === 'system' ? matchMedia('(prefers-color-scheme: dark)').matches : t === 'dark';
-  if (willBeDark === wasDark || matchMedia('(prefers-reduced-motion: reduce)').matches) return apply();
+  if (willBeDark === wasDark) return apply();
+  // Reduced motion: a gentle colour cross-fade instead of the moving circle.
+  if (reduceMotion) {
+    root.classList.add('theme-fade');
+    apply();
+    setTimeout(() => root.classList.remove('theme-fade'), 700);
+    return;
+  }
 
   const rect = from?.getBoundingClientRect?.();
   const x = rect ? rect.left + rect.width / 2 : innerWidth / 2;
@@ -862,7 +875,12 @@ function setTheme(t, from = null) {
     setTimeout(() => root.classList.remove('theme-fade'), 600);
     return;
   }
-  const vt = document.startViewTransition(apply);
+  let vt;
+  try {
+    vt = document.startViewTransition(apply);
+  } catch {
+    return apply();
+  }
   vt.ready
     .then(() => {
       root.animate(
@@ -1961,6 +1979,11 @@ async function viewAccount() {
             .map((t) => `<button type="button" data-t="${t}" class="${theme === t ? 'on' : ''}">${icon(t === 'dark' ? 'moon' : t === 'light' ? 'sun' : 'settings')}${t[0].toUpperCase() + t.slice(1)}</button>`)
             .join('')}</div>
           <div class="mt"><label class="toggle"><input type="checkbox" id="sound" ${soundOn() ? 'checked' : ''}>Sounds &amp; celebrations audio</label></div>
+          <div class="mt" style="display:flex;flex-direction:column;gap:8px;align-items:flex-start"><span class="strong small">Animations</span>
+            <div class="seg" id="motion-seg">${[['system', 'Follow device'], ['on', 'Always on']]
+              .map(([k, l]) => `<button type="button" data-m="${k}" class="${(store.get('motion', 'system') === 'on' ? 'on' : 'system') === k ? 'on' : ''}">${l}</button>`)
+              .join('')}</div>
+            ${matchMedia('(prefers-reduced-motion: reduce)').matches ? '<span class="muted tiny">Your device asks apps to reduce motion. Choose "Always on" to see all animations anyway.</span>' : ''}</div>
           <p class="muted small mt">Tip: press <span class="kbd-combo">${shortcutHtml()}</span> or <kbd>/</kbd> anywhere to search.</p>
         </div>
         <div class="card"><div class="card-head"><h2>Change password</h2></div>
@@ -2003,6 +2026,11 @@ async function viewAccount() {
     if (pushSupport() !== 'granted' || store.get('push') === 'off') await enablePush();
     await api('/push/test', { method: 'POST', body: {} });
   }, 'Test sent. Check your notifications');
+  $$('#motion-seg [data-m]').forEach((b) => (b.onclick = () => {
+    setMotion(b.dataset.m);
+    $$('#motion-seg button').forEach((x) => x.classList.toggle('on', x === b));
+    if (b.dataset.m === 'on') confetti({ count: 60 });
+  }));
   $('#sound').onchange = (e) => {
     store.set('sound', e.target.checked ? 'on' : 'off');
     if (e.target.checked) chime('success');

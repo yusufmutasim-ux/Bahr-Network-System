@@ -496,8 +496,9 @@ dialog::backdrop { background: rgba(10, 20, 18, .45); backdrop-filter: blur(4px)
   body { background: #fff; }
   .card { box-shadow: none; backdrop-filter: none; border-color: #ddd; }
 }
+/* Respect the device's reduce-motion setting unless the user chose "Animations: Always on" (html.motion-on). */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; }
+  :root:not(.motion-on) *, :root:not(.motion-on) *::before, :root:not(.motion-on) *::after { animation: none !important; transition: none !important; }
 }
 
 
@@ -862,7 +863,7 @@ button, a, label, .tile, .chip { touch-action: manipulation; }
 ::view-transition-old(root) { z-index: 1; }
 ::view-transition-new(root) { z-index: 2; }
 /* Fallback for browsers without View Transitions: cross-fade the colours. */
-.theme-fade, .theme-fade *, .theme-fade *::before, .theme-fade *::after {
+:root.theme-fade, :root.theme-fade *, :root.theme-fade *::before, :root.theme-fade *::after {
   transition: background-color .5s ease, color .5s ease, border-color .5s ease, fill .5s ease, stroke .5s ease, box-shadow .5s ease !important;
 }
 .spin-in { animation: spinIn .6s cubic-bezier(.2, 1.4, .4, 1); }
