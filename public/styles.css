@@ -867,3 +867,14 @@ button, a, label, .tile, .chip { touch-action: manipulation; }
 }
 .spin-in { animation: spinIn .6s cubic-bezier(.2, 1.4, .4, 1); }
 @keyframes spinIn { from { transform: rotate(-140deg) scale(.3); opacity: 0; } }
+
+/* Keyboard shortcut keys (readable in light and dark) */
+kbd {
+  font: 700 .72rem/1 system-ui, -apple-system, 'Segoe UI', sans-serif; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 24px; height: 24px; padding: 0 7px; border-radius: 7px;
+  background: var(--surface-solid); color: var(--ink-2); border: 1px solid var(--line-2); box-shadow: inset 0 -2px 0 var(--line-2);
+}
+.kbd-combo { display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; }
+.search .kbd-combo { margin-right: 4px; opacity: .85; }
+@media (max-width: 900px) { .search .kbd-combo { display: none; } }
+@media (hover: none) { .search .kbd-combo { display: none; } }

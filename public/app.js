@@ -292,6 +292,8 @@ const IN_APP = /FBAN|FBAV|Instagram|Line\/|WhatsApp|Snapchat|TikTok|; wv\)/.test
 const IS_WINDOWS = /Windows/.test(UA);
 const IS_MAC = /Macintosh/.test(UA) && !IS_IOS;
 // Laptops have no GPS: the browser asks the OS, which must have location services switched on.
+// Keyboard shortcut label: ⌘ on Mac, Ctrl elsewhere.
+const shortcutHtml = (key = 'K') => `<kbd>${IS_MAC || /Mac/.test(navigator.platform) ? '⌘' : 'Ctrl'}</kbd><kbd>${key}</kbd>`;
 const DESKTOP_OS_STEPS = IS_WINDOWS
   ? ['Open Windows Settings → Privacy & security → Location.', 'Turn ON "Location services" and "Let apps access your location" (and "Let desktop apps access your location").', 'Make sure Wi-Fi is ON (laptops locate themselves using nearby Wi-Fi), then try again.']
   : IS_MAC
@@ -937,6 +939,7 @@ function renderShell(active = parseHash().path) {
   $('#collapse-btn').innerHTML = icon('panel');
   $('#menu-btn').innerHTML = icon('menu');
   $('.search-ico').innerHTML = icon('search');
+  $('#search-kbd').innerHTML = shortcutHtml();
   $('#bell-btn').innerHTML = `${icon('bell')}${notifCount() ? `<span class="badge-dot">${notifCount()}</span>` : ''}`;
   setBadge(notifCount());
   paintThemeButtons();
@@ -1958,7 +1961,7 @@ async function viewAccount() {
             .map((t) => `<button type="button" data-t="${t}" class="${theme === t ? 'on' : ''}">${icon(t === 'dark' ? 'moon' : t === 'light' ? 'sun' : 'settings')}${t[0].toUpperCase() + t.slice(1)}</button>`)
             .join('')}</div>
           <div class="mt"><label class="toggle"><input type="checkbox" id="sound" ${soundOn() ? 'checked' : ''}>Sounds &amp; celebrations audio</label></div>
-          <p class="muted small mt">Tip: press <kbd>⌘K</kbd> or <kbd>/</kbd> anywhere to search.</p>
+          <p class="muted small mt">Tip: press <span class="kbd-combo">${shortcutHtml()}</span> or <kbd>/</kbd> anywhere to search.</p>
         </div>
         <div class="card"><div class="card-head"><h2>Change password</h2></div>
           <form id="pw" class="grid">
