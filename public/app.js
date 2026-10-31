@@ -1362,7 +1362,8 @@ function authShell(formHtml) {
         <div class="feat sky">${icon('chart')}Monthly reports &amp; CSV export</div>
       </div>
     </section>
-    <section class="auth-form"><div class="card">${formHtml}</div></section>`;
+    <section class="auth-form"><div class="card">${formHtml}</div>
+      <p class="auth-legal"><a href="/privacy.html">Privacy Policy</a> · <a href="/terms.html">Terms of Use</a></p></section>`;
 }
 
 function viewLogin() {

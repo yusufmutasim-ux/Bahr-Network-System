@@ -1138,3 +1138,5 @@ dialog.task-modal .card { max-height: 88vh; overflow-y: auto; }
 @media (max-width: 640px) {
   #upload-tray { bottom: calc(92px + env(safe-area-inset-bottom)); }
 }
+.auth-legal { text-align: center; margin-top: 14px; font-size: .8rem; color: var(--muted); }
+.auth-legal a { color: inherit; }
