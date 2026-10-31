@@ -25,6 +25,7 @@ const { registerCulture } = require('./culture');
 const { registerTasks, remindDueTasks } = require('./tasks');
 const { resolveMapLink } = require('./maplink');
 const push = require('./push');
+const drive = require('./drive');
 
 const PAYOUT_METHODS = ['instapay', 'vodafone_cash', 'cash'];
 const ROLES = ['owner', 'lead', 'employee'];
@@ -1178,6 +1179,59 @@ function createApp(db, { now = () => new Date() } = {}) {
     res.json({ ok: true });
   });
 
+  // ----- Google Drive (task files) -----
+
+  const callbackUrl = (req) => `${req.protocol}://${req.get('host')}/api/drive/callback`;
+
+  app.get('/api/admin/drive', requireOwner, async (req, res) => {
+    const st = await drive.getState(db);
+    let quota = null;
+    let error = null;
+    if (st?.refresh_token) {
+      try {
+        quota = await drive.about(db);
+      } catch (err) {
+        error = err.message;
+      }
+    }
+    const files = await db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM task_files WHERE kind = 'drive'`);
+    res.json({
+      configured: drive.configured(),
+      connected: !!st?.refresh_token,
+      email: quota?.email || st?.email || null,
+      connected_at: st?.connected_at || null,
+      quota,
+      error,
+      redirect_uri: callbackUrl(req),
+      files: Number(files.n),
+      bytes: Number(files.bytes),
+    });
+  });
+
+  // Browser navigation (not fetch): sends the owner to Google's consent screen.
+  app.get('/api/admin/drive/connect', requireOwner, async (req, res) => {
+    if (!drive.configured()) fail('Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Vercel first (see Settings → File storage).');
+    res.redirect(await drive.startAuth(db, req.user.id, callbackUrl(req)));
+  });
+
+  app.get('/api/drive/callback', requireOwner, async (req, res) => {
+    const back = (q) => res.redirect(`/#/settings?${new URLSearchParams(q)}`);
+    if (req.query.error) return back({ drive: 'error', msg: req.query.error === 'access_denied' ? 'You cancelled the Google sign-in.' : String(req.query.error) });
+    try {
+      const email = await drive.finishAuth(db, { code: String(req.query.code || ''), state: String(req.query.state || ''), userId: req.user.id, redirectUri: callbackUrl(req) });
+      await audit(req.user, 'drive.connect', email || 'Google Drive');
+      back({ drive: 'connected' });
+    } catch (err) {
+      back({ drive: 'error', msg: err.message });
+    }
+  });
+
+  app.post('/api/admin/drive/disconnect', requireOwner, async (req, res) => {
+    await drive.disconnect(db);
+    await audit(req.user, 'drive.disconnect', 'Google Drive');
+    res.json({ ok: true });
+  });
+
   // ----- Activity log, weekly summary, backup -----
 
   app.get('/api/admin/audit', requireOwner, async (req, res) => {
@@ -1220,6 +1274,8 @@ function createApp(db, { now = () => new Date() } = {}) {
       ['Rewards', `SELECT r.id, r.user_id, u.name, r.points, r.amount, r.method, r.payout_number, r.status, d.name AS decided_by, r.decided_at, r.created_at
                    FROM reward_requests r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.decided_by ORDER BY r.id`],
       ['Holidays', 'SELECT id, date, name FROM holidays ORDER BY date'],
+      ['Task files', `SELECT f.id, f.task_id, t.title AS task, f.kind, f.name, f.size, f.mime, f.url, u.name AS added_by, f.created_at
+                      FROM task_files f JOIN tasks t ON t.id = f.task_id LEFT JOIN users u ON u.id = f.user_id ORDER BY f.id`],
       ['Tasks', `SELECT t.id, t.title, t.client, t.department, a.name AS assignee, c.name AS created_by, t.status, t.priority,
                         t.start_date, t.due_date, t.completed_at, t.created_at, t.description,
                         (SELECT COUNT(*) FROM task_items i WHERE i.task_id = t.id AND i.done = 1) || '/' ||
@@ -1464,6 +1520,7 @@ function validateSettings(s) {
   out.weekly_summary = s.weekly_summary !== false;
   out.dept_schedules = validateSchedules(s.dept_schedules, out.departments);
   out.am_department = out.departments.includes(s.am_department) ? s.am_department : '';
+  num('max_upload_mb', 1, 5 * 1024 * 1024);
   delete out.holiday_dates;
   return out;
 }

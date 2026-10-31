@@ -1,4 +1,5 @@
 const push = require('./push');
+const drive = require('./drive');
 
 // Client work between account managers and departments.
 //  - Account managers (members of settings.am_department), leads and owners create tasks for a department.
@@ -67,9 +68,13 @@ function registerTasks(app, ctx) {
     SELECT t.*, a.name AS assignee_name, c.name AS created_by_name,
            (SELECT COUNT(*) FROM task_items i WHERE i.task_id = t.id) AS items_total,
            (SELECT COUNT(*) FROM task_items i WHERE i.task_id = t.id AND i.done = 1) AS items_done,
-           (SELECT COUNT(*) FROM task_comments m WHERE m.task_id = t.id AND m.kind = 'comment') AS comments
+           (SELECT COUNT(*) FROM task_comments m WHERE m.task_id = t.id AND m.kind = 'comment') AS comments,
+           (SELECT COUNT(*) FROM task_files f WHERE f.task_id = t.id) AS files
     FROM tasks t LEFT JOIN users a ON a.id = t.assignee_id LEFT JOIN users c ON c.id = t.created_by`;
-  const shape = (r) => ({ ...r, items_total: Number(r.items_total), items_done: Number(r.items_done), comments: Number(r.comments) });
+  const shape = (r) => {
+    const { drive_folder_id: _folder, ...rest } = r;
+    return { ...rest, items_total: Number(r.items_total), items_done: Number(r.items_done), comments: Number(r.comments), files: Number(r.files) };
+  };
 
   // scope: mine (assigned to me) · inbox (my department, unassigned) · team (my department) · created (by me) · all
   app.get('/api/tasks', requireUser, async (req, res) => {
@@ -192,19 +197,28 @@ function registerTasks(app, ctx) {
 
   app.get('/api/tasks/:id', requireUser, async (req, res) => {
     const t = await loadTask(req.user, idParam(req));
-    const [row, items, comments] = await Promise.all([
+    const [row, items, files, driveState, comments] = await Promise.all([
       db.get(`${LIST_SQL} WHERE t.id = ?`, [t.id]),
       db.all('SELECT * FROM task_items WHERE task_id = ? ORDER BY position, id', [t.id]),
+      db.all(
+        `SELECT f.id, f.kind, f.drive_id, f.name, f.size, f.mime, f.url, f.created_at, f.user_id, u.name AS user_name
+         FROM task_files f LEFT JOIN users u ON u.id = f.user_id WHERE f.task_id = ? ORDER BY f.id DESC`,
+        [t.id],
+      ),
+      drive.getState(db),
       db.all(
         `SELECT m.*, u.name AS user_name FROM task_comments m LEFT JOIN users u ON u.id = m.user_id WHERE m.task_id = ? ORDER BY m.id`,
         [t.id],
       ),
     ]);
     const s = await settings();
+    const canWork = t.assignee_id === req.user.id || manages(req.user, t);
     res.json({
       ...shape(row),
       items,
       comments,
+      files: files.map((f) => ({ ...f, size: f.size == null ? null : Number(f.size), can_delete: f.user_id === req.user.id || manages(req.user, t) })),
+      uploads: { drive: !!driveState?.refresh_token, max_mb: s.max_upload_mb, allowed: canWork },
       can: {
         manage: manages(req.user, t),
         assign: req.user.role === 'owner' || (req.user.role === 'lead' && req.user.department === t.department),
@@ -341,6 +355,99 @@ function registerTasks(app, ctx) {
     await db.run('DELETE FROM task_items WHERE id = ? AND task_id = ?', [posInt(req.params.itemId) || 0, t.id]);
     res.json({ ok: true });
   });
+
+  // ----- Files -----
+
+  async function canDeliver(user, id) {
+    const t = await loadTask(user, id);
+    if (!(t.assignee_id === user.id || manages(user, t))) fail('Only the people working on this task can add files', 403);
+    return t;
+  }
+  const driveFail = (err) => fail(err instanceof drive.DriveError ? err.message : `Google Drive is unreachable right now (${err.message})`, 502);
+
+  // Step 1: open a resumable upload. The browser sends the bytes straight to Google.
+  app.post('/api/tasks/:id/uploads', requireUser, async (req, res) => {
+    const t = await canDeliver(req.user, idParam(req));
+    const s = await settings();
+    const name = str(req.body.name, 200) || fail('File name is missing');
+    const size = Number(req.body.size);
+    if (!Number.isFinite(size) || size <= 0) fail('That file is empty');
+    if (size > s.max_upload_mb * 1024 * 1024) fail(`Files can be at most ${s.max_upload_mb >= 1024 ? `${Math.round(s.max_upload_mb / 102.4) / 10} GB` : `${s.max_upload_mb} MB`}. Share bigger ones as a link.`);
+    const origin = typeof req.headers.origin === 'string' && /^https?:\/\//.test(req.headers.origin) ? req.headers.origin : `${req.protocol}://${req.get('host')}`;
+    try {
+      res.json(await drive.createUpload(db, t, { name, size, mime: str(req.body.mime, 120) }, origin));
+    } catch (err) {
+      driveFail(err);
+    }
+  });
+
+  // Step 2: after the upload, register what's new in the task's Drive folder and share it by link.
+  app.post('/api/tasks/:id/files/sync', requireUser, async (req, res) => {
+    const u = req.user;
+    const t = await canDeliver(u, idParam(req));
+    if (!t.drive_folder_id) return res.json([]);
+    const mine = new Set((Array.isArray(req.body.names) ? req.body.names : []).map((n) => str(n, 200)));
+    let found;
+    try {
+      found = await drive.listFolder(db, t.drive_folder_id);
+    } catch (err) {
+      driveFail(err);
+    }
+    const added = [];
+    for (const f of found) {
+      const row = await db.get(
+        `INSERT INTO task_files (task_id, user_id, kind, drive_id, name, size, mime, url) VALUES (?, ?, 'drive', ?, ?, ?, ?, ?)
+         ON CONFLICT (drive_id) DO NOTHING RETURNING *`,
+        [t.id, mine.has(f.name) ? u.id : null, f.id, f.name, f.size == null ? null : Number(f.size), f.mimeType || null,
+          f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`],
+      );
+      if (!row) continue;
+      await drive.shareByLink(db, f.id);
+      added.push(row);
+    }
+    if (added.length) await afterNewFiles(u, t, added.map((f) => f.name));
+    res.json(added);
+  });
+
+  // Files already hosted elsewhere (WeTransfer, Frame.io, Behance, a Drive link...). Works without Drive connected.
+  app.post('/api/tasks/:id/links', requireUser, async (req, res) => {
+    const t = await canDeliver(req.user, idParam(req));
+    const link = str(req.body.url, 2000);
+    let parsed;
+    try {
+      parsed = new URL(link);
+    } catch {
+      fail('Paste a full link starting with https://');
+    }
+    if (!/^https?:$/.test(parsed.protocol)) fail('Paste a full link starting with https://');
+    const name = str(req.body.name, 200) || parsed.hostname.replace(/^www\./, '');
+    const row = await db.get(
+      `INSERT INTO task_files (task_id, user_id, kind, name, url) VALUES (?, ?, 'link', ?, ?) RETURNING *`,
+      [t.id, req.user.id, name, parsed.href],
+    );
+    await afterNewFiles(req.user, t, [name]);
+    res.status(201).json(row);
+  });
+
+  app.post('/api/tasks/:id/files/:fileId/delete', requireUser, async (req, res) => {
+    const t = await loadTask(req.user, idParam(req));
+    const f = await db.get('SELECT * FROM task_files WHERE id = ? AND task_id = ?', [posInt(req.params.fileId) || 0, t.id]);
+    if (!f) fail('Not found', 404);
+    if (!(f.user_id === req.user.id || manages(req.user, t))) fail('Only the person who added it or a manager can remove it', 403);
+    await db.run('DELETE FROM task_files WHERE id = ?', [f.id]);
+    if (f.kind === 'drive') await drive.trashFile(db, f.drive_id); // goes to the Drive trash, recoverable for 30 days
+    await event(t.id, req.user.id, `removed ${f.name}`);
+    res.json({ ok: true });
+  });
+
+  async function afterNewFiles(u, t, names) {
+    const what = names.length === 1 ? names[0] : `${names.length} files`;
+    await event(t.id, u.id, `added ${what}`);
+    await db.run('UPDATE tasks SET updated_at = now() WHERE id = ?', [t.id]);
+    await notify([t.assignee_id, t.created_by, ...(await deptManagers(t.department))], u, {
+      title: `📎 ${u.name} added ${what}`, body: t.title, url: taskUrl(t.id), tag: `task-${t.id}-f`,
+    });
+  }
 
   // ----- Comments -----
 

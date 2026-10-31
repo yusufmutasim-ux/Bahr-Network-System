@@ -246,6 +246,22 @@ CREATE TABLE IF NOT EXISTS task_comments (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS task_comments_task ON task_comments (task_id, id);
+
+-- Deliverables on a task: files uploaded to the connected Google Drive, or links (WeTransfer, Frame.io...).
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS drive_folder_id TEXT;
+CREATE TABLE IF NOT EXISTS task_files (
+  id SERIAL PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('drive', 'link')),
+  drive_id TEXT UNIQUE,
+  name TEXT NOT NULL,
+  size BIGINT,
+  mime TEXT,
+  url TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS task_files_task ON task_files (task_id, id);
 `;
 
 const DEFAULT_SETTINGS = {
@@ -294,6 +310,8 @@ const DEFAULT_SETTINGS = {
   payroll_add_rewards: false,
   // Members of this department (account managers) can send tasks to other departments.
   am_department: 'Account Management',
+  // Largest single upload to Google Drive, in MB.
+  max_upload_mb: 20480,
   weekly_summary: true,
 };
 

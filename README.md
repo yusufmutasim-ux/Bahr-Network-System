@@ -44,6 +44,9 @@ Staff attendance and management system for Bahr Network. It covers GPS check-in,
 - Flow: *To do → In progress → In review → Done*. The assignee sends it for review; the account manager or lead approves it or sends it back with a comment.
 - Board (drag & drop between columns), List and Timeline (Gantt) views, search and client/department filters, a comment thread with history on every task, and a "My tasks" card on the home page.
 - Push notifications for new, assigned, review, approved, sent-back and commented tasks, plus a morning reminder for tasks due today or overdue.
+- **Files on every task**: upload deliverables (videos, designs, PDFs…) straight to the company's **Google Drive**, or add a link (WeTransfer, Frame.io…).
+  - Files go from the browser directly to Drive in 16 MB chunks, so size isn't limited by the server (default max 20 GB per file, changeable). A dropped connection resumes where it stopped.
+  - They're filed as `Bahr Network Files / <client> / #<task> <title>` and shared by link so the team can open them. Removing a file moves it to the Drive trash.
 
 **Culture & engagement** (built for a creative / marketing agency)
 - **Team Wall:** anyone can send **kudos** to a teammate (💡 Creative Spark, 🤝 Team Player, 🚀 Extra Mile, 🎯 Client Hero, 😄 Good Vibes, 🧠 Mentor) and react with emojis. There's a daily limit, and the owner can optionally award green points per kudos.
@@ -109,6 +112,7 @@ Open http://localhost:3000. Data is stored in `data/pglite` unless `DATABASE_URL
 | `DATABASE_URL` | unset → embedded PGlite | Postgres connection string |
 | `PORT` | `3000` | |
 | `COOKIE_SECURE` | unset (always on with Vercel) | Set to `1` when served over HTTPS |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | unset | Google OAuth client for task file uploads (Settings → File storage shows the setup steps and the redirect URI) |
 | `CRON_SECRET` | unset | If set, `/api/cron/absences` requires `Authorization: Bearer <secret>` |
 
 > Browsers only allow GPS location on `https://` sites (or on `localhost`). Vercel sites are HTTPS by default.

@@ -2749,7 +2749,12 @@ async function viewReport(params) {
 
 let reopenSections = null; // sections to keep open when the page re-renders after saving
 async function viewSettings() {
-  const s = await api('/admin/settings');
+  const [s, dr] = await Promise.all([api('/admin/settings'), api('/admin/drive').catch(() => null)]);
+  const hp = parseHash().params;
+  if (hp.get('drive') === 'connected') { setTimeout(() => { confetti({ count: 90 }); toast('Google Drive connected. Teams can upload files to tasks now 🎉', 'success'); }); reopenSections = ['files']; }
+  if (hp.get('drive') === 'error') { setTimeout(() => toast(hp.get('msg') || 'Google Drive could not be connected', 'error')); reopenSections = ['files']; }
+  if (hp.get('open')) reopenSections = [hp.get('open')];
+  if (hp.get('drive') || hp.get('open')) history.replaceState(null, '', '#/settings');
   cachedRules = s;
   const mapLink = s.office_lat != null ? `https://www.google.com/maps?q=${s.office_lat},${s.office_lng}` : '';
   const timeField = (name, label, color) => `<label class="f"><span class="row" style="gap:6px"><span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--${color})"></span>${label}</span><input type="time" name="${name}" value="${s[name]}" required></label>`;
@@ -2867,6 +2872,32 @@ async function viewSettings() {
           <a class="btn sm" href="/api/admin/export.xlsx">${icon('download')}Download full backup (Excel)</a>
           <a class="btn sm light" href="#/audit">${icon('list')}Activity log</a></div>
         <p class="muted tiny" style="margin-top:8px">The backup has every table (staff, attendance, points, leave, fixes, rewards, kudos, holidays, settings) on its own sheet. Passwords are never included.</p>`)}
+
+      ${dr ? sec('files', '🗂️', 'File storage (Google Drive)', dr.connected ? `Connected · ${esc(dr.email || 'Google Drive')}${dr.quota ? ` · ${fmtBytes(dr.quota.limit - dr.quota.usage)} free` : ''}` : dr.configured ? '<span style="color:var(--red)">Not connected: teams can only share links</span>' : 'Not set up yet',
+        (dr.connected
+          ? `<div class="row between wrap" style="gap:12px">
+              <div class="row" style="gap:12px"><span class="avatar lg sky">🗂️</span><div><strong>${esc(dr.email || 'Google Drive')}</strong>
+                <div class="muted small">Connected ${relTime(dr.connected_at)} · ${dr.files} file${dr.files === 1 ? '' : 's'} uploaded (${fmtBytes(dr.bytes)})</div></div></div>
+              <button class="btn sm light" type="button" id="drive-off">Disconnect</button></div>
+            ${dr.error ? `<div class="notice pink mt">${icon('alert')}${esc(dr.error)} <a href="/api/admin/drive/connect">Reconnect</a></div>` : ''}
+            ${dr.quota ? `<div class="mt"><div class="row between small"><span>Drive storage</span><span class="muted">${fmtBytes(dr.quota.usage)} of ${fmtBytes(dr.quota.limit)}</span></div>
+              <div class="task-progress big"><i style="width:${Math.max(1, pct(dr.quota.usage, dr.quota.limit))}%"></i></div></div>` : ''}
+            <p class="muted small mt">Files land in <b>Bahr Network Files / client / task</b> in this Drive and are shared by link so the team can open them. Removing a file in the app moves it to the Drive trash.</p>`
+          : dr.configured
+            ? `<p class="small">Connect the Google account whose Drive should hold the team's files (your 5 TB account works great). You'll be asked to allow access; the app can only see the files it creates.</p>
+               <a class="btn mt" href="/api/admin/drive/connect">${icon('download')}Connect Google Drive</a>`
+            : `<p class="small">One-time setup (about 10 minutes, free):</p>
+               <ol class="setup-steps small">
+                 <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud Console</a> with your Google account and create a project (e.g. "Bahr Files").</li>
+                 <li>Go to <b>APIs &amp; Services → Library</b>, search <b>Google Drive API</b> and click <b>Enable</b>.</li>
+                 <li><b>OAuth consent screen</b>: choose <b>External</b>, fill the app name and your email, save. Then click <b>Publish app</b> so access doesn't expire after 7 days.</li>
+                 <li><b>Credentials → Create credentials → OAuth client ID</b> → <b>Web application</b>. Under <b>Authorized redirect URIs</b> add:
+                   <div class="row mt" style="gap:6px"><input readonly value="${esc(dr.redirect_uri)}" id="redir"><button class="btn sm light" type="button" id="copy-redir">${icon('copy')}</button></div></li>
+                 <li>In <b>Vercel → your project → Settings → Environment Variables</b> add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> from the client you created, then <b>Redeploy</b>.</li>
+                 <li>Come back here and tap <b>Connect Google Drive</b>.</li>
+               </ol>`)
+        + `<label class="f mt">Largest file per upload (GB)<input type="number" id="max-gb" value="${Math.round((s.max_upload_mb / 1024) * 10) / 10}" min="0.1" max="5000" step="0.1"></label>
+           <input type="hidden" name="max_upload_mb" value="${s.max_upload_mb}">`) : ''}
 
       ${sec('company', '🏢', 'Company', `${esc(s.company_name)} · ${esc(s.currency)} · ${esc(s.timezone)}`,
         `<div class="form-grid">
@@ -3036,7 +3067,7 @@ async function viewSettings() {
         work_days: $$('[data-wd]:checked', el).map((c) => Number(c.value)),
       }])),
     };
-    for (const k of ['radius_m', 'max_accuracy_m', 'very_late_reds', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'kudos_daily_limit', 'kudos_green', 'daily_hours', 'overtime_rate', 'annual_leave_days', 'sick_leave_days']) body[k] = Number(body[k]);
+    for (const k of ['max_upload_mb', 'radius_m', 'max_accuracy_m', 'very_late_reds', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'kudos_daily_limit', 'kudos_green', 'daily_hours', 'overtime_rate', 'annual_leave_days', 'sick_leave_days']) body[k] = Number(body[k]);
     return act(btn, async () => {
       const saved = await api('/admin/settings', { method: 'PUT', body });
       company = saved.company_name;
@@ -3055,6 +3086,15 @@ async function viewSettings() {
   $$('#dept-sch [data-own]').forEach((c) => c.addEventListener('change', () => {
     if (c.checked) c.closest('details').open = true;
   }));
+  $('#max-gb')?.addEventListener('input', (e) => { form.max_upload_mb.value = Math.max(1, Math.round(Number(e.target.value) * 1024)); });
+  $('#copy-redir')?.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('#redir').value); toast('Copied', 'success'); } catch { $('#redir').select(); }
+  });
+  $('#drive-off')?.addEventListener('click', () => confirmBox('Disconnect Google Drive?', 'Files already uploaded stay in Drive and their links keep working, but nobody can upload new files until you connect again.', async () => {
+    await api('/admin/drive/disconnect', { method: 'POST', body: {} });
+    toast('Google Drive disconnected', 'success');
+    route();
+  }, { submit: 'Disconnect' }));
   $('#send-weekly').onclick = (e) => act(e.currentTarget, async () => {
     const r = await api('/admin/weekly-summary', { method: 'POST', body: {} });
     const w = r.summary;
@@ -3439,7 +3479,7 @@ function taskCard(t) {
     <h4>${esc(t.title)}</h4>
     ${t.description ? `<p class="task-desc">${esc(t.description)}</p>` : ''}
     ${t.items_total ? `<div class="row" style="gap:8px;margin-top:10px">${progressHtml(t)}</div>` : ''}
-    <div class="task-foot">${assigneeHtml(t)}<span class="row" style="gap:6px">${t.comments ? `<span class="tiny muted row" style="gap:3px">💬 ${t.comments}</span>` : ''}${dueChip(t)}</span></div>
+    <div class="task-foot">${assigneeHtml(t)}<span class="row" style="gap:6px">${t.files ? `<span class="tiny muted row" style="gap:3px">📎 ${t.files}</span>` : ''}${t.comments ? `<span class="tiny muted row" style="gap:3px">💬 ${t.comments}</span>` : ''}${dueChip(t)}</span></div>
   </article>`;
 }
 
@@ -3687,6 +3727,7 @@ async function openTask(id) {
   const when = (iso) => new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
   dlg.className = 'modal task-modal';
+  dlg.dataset.task = id;
   dlg.innerHTML = `<div class="card">
     <div class="row between" style="align-items:flex-start;gap:10px">
       <div class="task-tags">${chip(TASK_STATUS, t.status)}<span class="chip ${PRIORITY[t.priority][1]}">${icon('flag')}${PRIORITY[t.priority][0]}</span>${t.client ? `<span class="chip">${esc(t.client)}</span>` : ''}</div>
@@ -3712,6 +3753,7 @@ async function openTask(id) {
         ${t.can.manage ? `<button type="button" class="icon-btn xs ghost" data-del-item="${i.id}" aria-label="Remove">${icon('x')}</button>` : ''}</label>`).join('')}</div>
       ${t.can.work ? `<form class="row task-add" id="t-item"><input name="text" maxlength="200" placeholder="Add a step…" autocomplete="off"><button class="btn sm light" type="submit">${icon('plus')}</button></form>` : ''}
     </div>
+    ${filesSection(t)}
     <div class="task-section">
       <h3>Activity</h3>
       <div class="task-feed">${t.comments.map((c) => c.kind === 'event'
@@ -3727,7 +3769,7 @@ async function openTask(id) {
     refreshCounts().then(() => renderShell(parseHash().path));
   };
   $$('[data-close]', dlg).forEach((b) => (b.onclick = () => dlg.close()));
-  dlg.onclose = () => { dlg.className = 'modal'; };
+  dlg.onclose = () => { dlg.className = 'modal'; delete dlg.dataset.task; setTimeout(drawUploads); };
   dlg.onclick = (e) => { if (e.target === dlg) dlg.close(); };
   $$('[data-status]', dlg).forEach((b) => (b.onclick = () => act(b, async () => {
     await api(`/tasks/${id}`, { method: 'PATCH', body: { status: b.dataset.status } });
@@ -3761,6 +3803,8 @@ async function openTask(id) {
     const body = reply.body.value.trim();
     if (body) act(e.submitter, async () => { await api(`/tasks/${id}/comments`, { method: 'POST', body: { body } }); await reopen(); });
   };
+  bindFiles(t, dlg, reopen);
+  drawUploads(); // the sheet was just re-rendered: put the upload tray back
   $('[data-act=edit]', dlg)?.addEventListener('click', () => taskForm(t));
   $('[data-act=delete]', dlg)?.addEventListener('click', () => confirmBox('Delete this task?', 'Its checklist and comments are deleted too.', async () => {
     await api(`/tasks/${id}/delete`, { method: 'POST', body: {} });
@@ -3769,6 +3813,159 @@ async function openTask(id) {
   }, { submit: 'Delete' }));
   if (!dlg.open) dlg.showModal();
   if (parseHash().params.get('task')) history.replaceState(null, '', location.href.replace(/([?&])task=\d+&?/, '$1').replace(/[?&]$/, ''));
+}
+
+// ---------- Task files: direct, chunked uploads to Google Drive ----------
+
+const fmtBytes = (n) => {
+  if (n == null) return '';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let v = Number(n);
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
+  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${u[i]}`;
+};
+const fileEmoji = (f) => (f.kind === 'link' ? '🔗' : /^video/.test(f.mime) ? '🎬' : /^image/.test(f.mime) ? '🖼️' : /^audio/.test(f.mime) ? '🎧'
+  : /pdf/.test(f.mime) ? '📕' : /zip|rar|7z|compressed/.test(f.mime || f.name) ? '🗜️' : /photoshop|illustrator|\.psd|\.ai$|figma/.test(`${f.mime} ${f.name}`) ? '🎨' : '📄');
+
+const uploads = []; // { id, taskId, name, size, sent, state: 'up'|'done'|'error', error }
+const CHUNK = 16 * 1024 * 1024; // must be a multiple of 256 KB
+
+function drawUploads() {
+  let tray = $('#upload-tray');
+  const active = uploads.filter((u) => u.state !== 'gone');
+  if (!active.length) return tray?.remove();
+  if (!tray) {
+    tray = document.createElement('div');
+    tray.id = 'upload-tray';
+  }
+  // An open sheet is in the browser's top layer, so the tray lives inside it while it's open.
+  const host = $('#modal').open ? $('#modal') : document.body;
+  if (tray.parentElement !== host) host.append(tray);
+  const busy = active.filter((u) => u.state === 'up' || u.state === 'queued');
+  tray.innerHTML = `<div class="row between"><strong class="small">${busy.length ? `Uploading ${busy.length} file${busy.length === 1 ? '' : 's'}…` : 'Uploads finished'}</strong>
+      ${busy.length ? '' : `<button class="icon-btn xs ghost" type="button" data-tray-close aria-label="Close">${icon('x')}</button>`}</div>
+    ${active.map((u) => `<div class="up-row ${u.state}"><div class="row between small"><span class="up-name">${esc(u.name)}</span>
+        <span class="tiny muted nowrap">${u.state === 'done' ? '✓ Done' : u.state === 'error' ? 'Failed' : u.state === 'queued' ? 'Waiting…' : `${pct(u.sent, u.size)}% · ${fmtBytes(u.sent)} / ${fmtBytes(u.size)}`}</span></div>
+      <div class="task-progress"><i style="width:${u.state === 'done' ? 100 : pct(u.sent, u.size)}%"></i></div>
+      ${u.error ? `<div class="tiny" style="color:var(--red)">${esc(u.error)}</div>` : ''}</div>`).join('')}`;
+  $('[data-tray-close]', tray)?.addEventListener('click', () => { uploads.forEach((u) => (u.state = 'gone')); drawUploads(); });
+}
+
+// PUT one chunk with progress. Resolves with { status, range } (range = last byte Google has).
+function putChunk(url, blob, start, total, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    if (blob) xhr.setRequestHeader('Content-Range', `bytes ${start}-${start + blob.size - 1}/${total}`);
+    else xhr.setRequestHeader('Content-Range', `bytes */${total}`);
+    xhr.upload.onprogress = (e) => onProgress?.(e.loaded);
+    xhr.onload = () => resolve({ status: xhr.status, range: xhr.getResponseHeader('Range') });
+    xhr.onerror = () => reject(new Error('Connection lost'));
+    xhr.send(blob || null);
+  });
+}
+
+async function uploadFile(task, file, done) {
+  const u = { id: Math.random(), taskId: task.id, name: file.name, size: file.size, sent: 0, state: 'up' };
+  uploads.push(u);
+  drawUploads();
+  try {
+    const { upload_url: url } = await api(`/tasks/${task.id}/uploads`, { method: 'POST', body: { name: file.name, size: file.size, mime: file.type } });
+    let offset = 0;
+    let tries = 0;
+    while (offset < file.size) {
+      const end = Math.min(file.size, offset + CHUNK);
+      try {
+        const r = await putChunk(url, file.slice(offset, end), offset, file.size, (n) => { u.sent = offset + n; drawUploads(); });
+        if (r.status === 308) offset = r.range ? Number(r.range.split('-')[1]) + 1 : end;
+        else if (r.status === 200 || r.status === 201) offset = file.size;
+        else throw new Error(`Google answered ${r.status}`);
+        tries = 0;
+      } catch (err) {
+        // Dropped connection: wait, ask Google how much arrived, and carry on from there.
+        if (++tries > 6) throw err;
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** tries));
+        try {
+          const r = await putChunk(url, null, 0, file.size);
+          if (r.status === 200 || r.status === 201) offset = file.size;
+          else if (r.status === 308) offset = r.range ? Number(r.range.split('-')[1]) + 1 : offset;
+        } catch { /* still offline: retry the same chunk */ }
+      }
+      u.sent = offset;
+      drawUploads();
+    }
+    u.state = 'done';
+    done?.(file.name);
+  } catch (err) {
+    u.state = 'error';
+    u.error = err.message === 'Connection lost' ? 'Connection lost. Try again on a stable connection.' : err.message;
+  }
+  drawUploads();
+}
+
+async function uploadFiles(task, files) {
+  const names = [];
+  const list = [...files];
+  // One at a time: full bandwidth for each file and a clear queue in the tray.
+  list.forEach((f) => uploads.push({ id: Math.random(), taskId: task.id, name: f.name, size: f.size, sent: 0, state: 'queued', file: f }));
+  drawUploads();
+  for (const f of list) {
+    const q = uploads.findIndex((u) => u.file === f && u.state === 'queued');
+    if (q >= 0) uploads.splice(q, 1);
+    await uploadFile(task, f, (n) => names.push(n));
+  }
+  if (!names.length) return;
+  try {
+    await api(`/tasks/${task.id}/files/sync`, { method: 'POST', body: { names } });
+    toast(names.length === 1 ? `${names[0]} uploaded` : `${names.length} files uploaded`, 'success');
+    chime();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+  if ($('#modal').open && $('#modal').dataset.task === String(task.id)) openTask(task.id);
+  taskReload?.();
+}
+window.addEventListener('beforeunload', (e) => {
+  if (uploads.some((u) => u.state === 'up')) e.preventDefault();
+});
+
+function filesSection(t) {
+  const up = t.uploads;
+  return `<div class="task-section">
+    <div class="row between"><h3>Files</h3><span class="muted small">${t.files.length || ''}</span></div>
+    ${t.files.length ? `<div class="task-files">${t.files.map((f) => `<div class="task-file">
+        <a class="task-file-main" href="${esc(f.url)}" target="_blank" rel="noopener">
+          ${f.kind === 'drive' && /^(image|video)/.test(f.mime || '') ? `<img class="file-thumb" loading="lazy" alt="" src="https://drive.google.com/thumbnail?id=${encodeURIComponent(f.drive_id)}&sz=w160" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'file-ico',textContent:'${fileEmoji(f)}'}))">` : `<span class="file-ico">${fileEmoji(f)}</span>`}
+          <span class="grow"><strong>${esc(f.name)}</strong><span class="tiny muted">${[f.kind === 'link' ? 'Link' : fmtBytes(f.size), f.user_name, relTime(f.created_at)].filter(Boolean).map(esc).join(' · ')}</span></span></a>
+        ${f.kind === 'drive' ? `<a class="icon-btn xs" href="https://drive.google.com/uc?id=${encodeURIComponent(f.drive_id)}&export=download" target="_blank" rel="noopener" aria-label="Download" title="Download">${icon('download')}</a>` : ''}
+        ${f.can_delete ? `<button class="icon-btn xs ghost" type="button" data-del-file="${f.id}" data-name="${esc(f.name)}" aria-label="Remove">${icon('trash')}</button>` : ''}</div>`).join('')}</div>` : ''}
+    ${up.allowed ? `${up.drive
+        ? `<label class="dropzone" id="t-drop"><input type="file" id="t-file" multiple hidden>
+            <span>${icon('download')}</span><span><strong>Drop files or tap to upload</strong><span class="tiny muted">Saved to Google Drive · up to ${up.max_mb >= 1024 ? `${Math.round(up.max_mb / 102.4) / 10} GB` : `${up.max_mb} MB`} each</span></span></label>`
+        : `<div class="notice slate small">${icon('alert')}<span>File uploads need Google Drive. ${me.role === 'owner' ? '<a href="#/settings?open=files">Connect it in Settings</a>' : 'Ask the owner to connect it.'} You can still add a link below.</span></div>`}
+      <form class="row task-add" id="t-link"><input name="url" type="url" placeholder="…or paste a link (WeTransfer, Frame.io, Drive)" autocomplete="off"><button class="btn sm light" type="submit">${icon('plus')}</button></form>` : ''}
+  </div>`;
+}
+
+function bindFiles(t, dlg, reopen) {
+  const input = $('#t-file', dlg);
+  const drop = $('#t-drop', dlg);
+  if (input) input.onchange = () => { if (input.files.length) uploadFiles(t, input.files); input.value = ''; };
+  if (drop) {
+    ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+    ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, () => drop.classList.remove('over')));
+    drop.addEventListener('drop', (e) => { e.preventDefault(); if (e.dataTransfer.files.length) uploadFiles(t, e.dataTransfer.files); });
+  }
+  $('#t-link', dlg)?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const url = e.target.url.value.trim();
+    if (url) act(e.submitter, async () => { await api(`/tasks/${t.id}/links`, { method: 'POST', body: { url } }); await reopen('Link added'); });
+  });
+  $$('[data-del-file]', dlg).forEach((b) => (b.onclick = () => act(b, async () => {
+    await api(`/tasks/${t.id}/files/${b.dataset.delFile}/delete`, { method: 'POST', body: {} });
+    await reopen(`${b.dataset.name} removed`);
+  })));
 }
 
 // Compact "my tasks" card for the employee home page.

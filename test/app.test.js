@@ -512,6 +512,91 @@ test('tasks: account manager → department lead → team member, with review', 
   assert.equal(typeof (await emp('/cron/daily')).body.tasks, 'number');
 });
 
+test('task files: links, Google Drive connect, chunked direct upload, sync and share', async () => {
+  const { startFakeGoogle } = require('./fake-google');
+  const g = await startFakeGoogle();
+  try {
+    const task = (await owner('/tasks', { method: 'POST', body: { title: 'Launch video', client: 'Kiko', department: 'Design', assignee_id: dinaId } })).body;
+    const before = (await dina(`/tasks/${task.id}`)).body;
+    assert.deepEqual(before.uploads, { drive: false, max_mb: 20480, allowed: true });
+    const notConnected = await dina(`/tasks/${task.id}/uploads`, { method: 'POST', body: { name: 'a.mp4', size: 10 } });
+    assert.equal(notConnected.status, 502);
+    assert.match(notConnected.body.error, /not connected/);
+    // Links work without Drive.
+    assert.equal((await dina(`/tasks/${task.id}/links`, { method: 'POST', body: { url: 'javascript:alert(1)' } })).status, 400);
+    assert.equal((await dina(`/tasks/${task.id}/links`, { method: 'POST', body: { url: 'https://we.tl/t-abc', name: 'Raw footage' } })).status, 201);
+    assert.equal((await emp(`/tasks/${task.id}/links`, { method: 'POST', body: { url: 'https://x.com' } })).status, 404);
+
+    // Owner connects Drive through the OAuth redirect dance.
+    const cookie = [...owner.jar].map(([k, v]) => `${k}=${v}`).join('; ');
+    const hop = async (u) => fetch(u, { redirect: 'manual', headers: u.startsWith(base) ? { Cookie: cookie, 'User-Agent': UA.phone } : {} });
+    assert.equal((await dina('/admin/drive')).status, 403);
+    let r = await hop(`${base}/api/admin/drive/connect`);
+    assert.equal(r.status, 302);
+    r = await hop(r.headers.get('location')); // Google consent → back to our callback
+    r = await hop(r.headers.get('location'));
+    assert.match(r.headers.get('location'), /drive=connected/);
+    const st = (await owner('/admin/drive')).body;
+    assert.equal(st.connected, true);
+    assert.equal(st.email, 'owner@bahr.network');
+    assert.ok(st.quota.limit > 4e12);
+
+    // Too big for the limit → refused before anything reaches Google.
+    assert.equal((await dina(`/tasks/${task.id}/uploads`, { method: 'POST', body: { name: 'huge.mov', size: 30 * 1024 ** 3 } })).status, 400);
+    // Upload in 256 KB chunks straight to the session URL, resuming after a dropped chunk.
+    const size = 700000;
+    const up = await dina(`/tasks/${task.id}/uploads`, { method: 'POST', body: { name: 'final cut.mp4', size, mime: 'video/mp4' } });
+    assert.equal(up.status, 200);
+    assert.ok(up.body.upload_url.startsWith(g.base));
+    const data = Buffer.alloc(size, 7);
+    const chunk = 256 * 1024;
+    let offset = 0;
+    g.state.failNextChunk = true;
+    while (offset < size) {
+      const end = Math.min(size, offset + chunk);
+      let res;
+      try {
+        res = await fetch(up.body.upload_url, { method: 'PUT', headers: { 'Content-Range': `bytes ${offset}-${end - 1}/${size}` }, body: data.subarray(offset, end) });
+      } catch {
+        // Ask Google how much it has, then continue from there.
+        res = await fetch(up.body.upload_url, { method: 'PUT', headers: { 'Content-Range': `bytes */${size}` } });
+        offset = Number((res.headers.get('range') || 'bytes=0--1').split('-')[1]) + 1;
+        continue;
+      }
+      if (res.status === 308) offset = Number((res.headers.get('range') || 'bytes=0--1').split('-')[1]) + 1;
+      else { assert.equal(res.status, 200); offset = size; }
+    }
+    const synced = (await dina(`/tasks/${task.id}/files/sync`, { method: 'POST', body: { names: ['final cut.mp4'] } })).body;
+    assert.equal(synced.length, 1);
+    assert.equal(Number(synced[0].size), size);
+    assert.equal(synced[0].user_id, dinaId);
+    assert.ok(g.state.shared.includes(synced[0].drive_id)); // shared by link so the team can open it
+    assert.equal((await dina(`/tasks/${task.id}/files/sync`, { method: 'POST', body: {} })).body.length, 0); // idempotent
+    // Folder layout: Bahr Network Files / Kiko / #id Launch video
+    const f = g.state.files.get(synced[0].drive_id);
+    const folder = g.state.files.get(f.parents[0]);
+    assert.equal(folder.name, `#${task.id} Launch video`);
+    assert.equal(g.state.files.get(folder.parents[0]).name, 'Kiko');
+
+    const detail = (await owner(`/tasks/${task.id}`)).body;
+    assert.deepEqual(detail.files.map((x) => x.kind).sort(), ['drive', 'link']);
+    assert.ok(detail.comments.some((c) => /added final cut\.mp4/.test(c.body)));
+    // Removing a file moves it to the Drive trash.
+    assert.equal((await dina(`/tasks/${task.id}/files/${synced[0].id}/delete`, { method: 'POST', body: {} })).status, 200);
+    assert.equal(f.trashed, true);
+    // Two uploads starting at the same moment on a new task share one folder.
+    const t2 = (await owner('/tasks', { method: 'POST', body: { title: 'Teaser', client: 'Kiko', department: 'Design', assignee_id: dinaId } })).body;
+    const [a, b2] = await Promise.all(['a.png', 'b.png'].map((name) => dina(`/tasks/${t2.id}/uploads`, { method: 'POST', body: { name, size: 10 } })));
+    assert.equal(a.body.folder_id, b2.body.folder_id);
+    const live = [...g.state.files.values()].filter((x) => x.name === `#${t2.id} Teaser` && !x.trashed);
+    assert.equal(live.length, 1);
+    assert.equal((await owner('/admin/drive/disconnect', { method: 'POST', body: {} })).status, 200);
+    assert.equal((await owner('/admin/drive')).body.connected, false);
+  } finally {
+    g.close();
+  }
+});
+
 test('rejects non-JSON writes', async () => {
   const res = await fetch(`${base}/api/login`, { method: 'POST', body: 'username=a&password=b', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
   assert.equal(res.status, 415);

@@ -1109,3 +1109,32 @@ dialog.task-modal { width: 640px; }
   .task-meta { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 12px; }
 }
 dialog.task-modal .card { max-height: 88vh; overflow-y: auto; }
+
+/* ============ Task files & uploads ============ */
+.task-files { display: grid; gap: 6px; margin: 8px 0; }
+.task-file { display: flex; align-items: center; gap: 6px; padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-solid); }
+.task-file-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
+.task-file-main .grow { display: flex; flex-direction: column; min-width: 0; }
+.task-file-main strong { font-size: .88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-thumb, .file-ico { width: 46px; height: 46px; border-radius: 10px; flex: 0 0 auto; object-fit: cover; background: var(--sunken); }
+.file-ico { display: grid; place-items: center; font-size: 1.4rem; }
+.dropzone {
+  display: flex; align-items: center; gap: 12px; margin-top: 8px; padding: 16px; cursor: pointer;
+  border: 2px dashed var(--line-2, var(--line)); border-radius: 16px; transition: background .15s, border-color .15s;
+}
+.dropzone > span:first-child { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--lime); color: var(--lime-ink); transform: rotate(180deg); flex: 0 0 auto; }
+.dropzone > span:last-child { display: flex; flex-direction: column; }
+.dropzone:hover, .dropzone.over { background: color-mix(in srgb, var(--lime) 30%, transparent); border-color: var(--green); }
+#upload-tray {
+  position: fixed; right: 16px; bottom: 16px; z-index: 60; width: min(360px, calc(100vw - 32px)); max-height: 50vh; overflow-y: auto;
+  background: var(--surface-solid); border: 1px solid var(--line); border-radius: 18px; padding: 14px; box-shadow: var(--shadow-lg, var(--shadow));
+  display: grid; gap: 10px; animation: sheetUp .3s cubic-bezier(.2, .9, .3, 1);
+}
+.up-row { display: grid; gap: 5px; }
+.up-row .up-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.up-row.error .task-progress i { background: var(--red); }
+.setup-steps { display: grid; gap: 10px; padding-left: 20px; margin-top: 8px; }
+.setup-steps code { background: var(--sunken); padding: 1px 6px; border-radius: 6px; font-size: .82em; }
+@media (max-width: 640px) {
+  #upload-tray { bottom: calc(92px + env(safe-area-inset-bottom)); }
+}
