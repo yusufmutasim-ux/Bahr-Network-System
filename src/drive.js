@@ -18,7 +18,22 @@ const SCOPES = ['https://www.googleapis.com/auth/drive.file', 'openid', 'email']
 const FILE_FIELDS = 'id,name,size,mimeType,webViewLink,iconLink,parents,trashed';
 const FOLDER = 'application/vnd.google-apps.folder';
 
-const configured = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+// Values pasted into Vercel often carry spaces, line breaks or quotes: strip them.
+const env = (k) => String(process.env[k] || '').trim().replace(/^["']|["']$/g, '').trim();
+const clientId = () => env('GOOGLE_CLIENT_ID');
+const clientSecret = () => env('GOOGLE_CLIENT_SECRET');
+const configured = () => !!(clientId() && clientSecret());
+
+// Spots the usual copy-paste mistakes before sending the owner to Google.
+function configProblem() {
+  const id = clientId();
+  const secret = clientSecret();
+  if (!id || !secret) return null;
+  if (/^GOCSPX-/.test(id)) return 'GOOGLE_CLIENT_ID contains the client secret. Swap the two values in Vercel.';
+  if (!/\.apps\.googleusercontent\.com$/.test(id)) return 'GOOGLE_CLIENT_ID should end with ".apps.googleusercontent.com". Copy the Client ID again from Google Auth Platform → Clients.';
+  if (/\.apps\.googleusercontent\.com$/.test(secret)) return 'GOOGLE_CLIENT_SECRET contains the client ID. Swap the two values in Vercel.';
+  return null;
+}
 
 class DriveError extends Error {}
 
@@ -40,7 +55,7 @@ async function startAuth(db, userId, redirectUri) {
     [JSON.stringify({ state, user_id: userId, exp: Date.now() + 10 * 60 * 1000 })],
   );
   const q = new URLSearchParams({
-    client_id: process.env.GOOGLE_CLIENT_ID,
+    client_id: clientId(),
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: SCOPES.join(' '),
@@ -56,7 +71,7 @@ async function tokenRequest(params) {
   const res = await fetch(url('token'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET, ...params }),
+    body: new URLSearchParams({ client_id: clientId(), client_secret: clientSecret(), ...params }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new DriveError(data.error_description || data.error || `Google sign-in failed (${res.status})`);
@@ -195,5 +210,5 @@ async function disconnect(db) {
 }
 
 module.exports = {
-  DriveError, configured, getState, startAuth, finishAuth, createUpload, listFolder, shareByLink, trashFile, about, disconnect, taskFolder,
+  DriveError, configured, configProblem, getState, startAuth, finishAuth, createUpload, listFolder, shareByLink, trashFile, about, disconnect, taskFolder,
 };

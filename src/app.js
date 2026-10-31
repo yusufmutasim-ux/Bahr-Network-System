@@ -1197,6 +1197,8 @@ function createApp(db, { now = () => new Date() } = {}) {
     const files = await db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM task_files WHERE kind = 'drive'`);
     res.json({
       configured: drive.configured(),
+      config_problem: drive.configProblem(),
+      client_id_hint: drive.configured() ? `${String(process.env.GOOGLE_CLIENT_ID).trim().replace(/^["']/, '').slice(0, 12)}…` : null,
       connected: !!st?.refresh_token,
       email: quota?.email || st?.email || null,
       connected_at: st?.connected_at || null,
@@ -1211,6 +1213,7 @@ function createApp(db, { now = () => new Date() } = {}) {
   // Browser navigation (not fetch): sends the owner to Google's consent screen.
   app.get('/api/admin/drive/connect', requireOwner, async (req, res) => {
     if (!drive.configured()) fail('Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Vercel first (see Settings → File storage).');
+    if (drive.configProblem()) fail(drive.configProblem());
     res.redirect(await drive.startAuth(db, req.user.id, callbackUrl(req)));
   });
 

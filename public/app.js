@@ -2885,8 +2885,9 @@ async function viewSettings() {
               <div class="task-progress big"><i style="width:${Math.max(1, pct(dr.quota.usage, dr.quota.limit))}%"></i></div></div>` : ''}
             <p class="muted small mt">Files land in <b>Bahr Network Files / client / task</b> in this Drive and are shared by link so the team can open them. Removing a file in the app moves it to the Drive trash.</p>`
           : dr.configured
-            ? `<p class="small">Connect the Google account whose Drive should hold the team's files (your 5 TB account works great). You'll be asked to allow access; the app can only see the files it creates.</p>
-               <a class="btn mt" href="/api/admin/drive/connect">${icon('download')}Connect Google Drive</a>`
+            ? dr.config_problem ? `<div class="notice pink">${icon('alert')}<span>${esc(dr.config_problem)} Then redeploy in Vercel.</span></div>` : `<p class="small">Connect the Google account whose Drive should hold the team's files (your 5 TB account works great). You'll be asked to allow access; the app can only see the files it creates.</p>
+               <a class="btn mt" href="/api/admin/drive/connect">${icon('download')}Connect Google Drive</a>
+               <p class="muted tiny mt">Using client ${esc(dr.client_id_hint || '')} · If Google says "OAuth client was not found", wait a few minutes (new clients take time to activate) and check the Client ID in Vercel.</p>`
             : `<p class="small">One-time setup (about 10 minutes, free):</p>
                <ol class="setup-steps small">
                  <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud Console</a> with your Google account and create a project (e.g. "Bahr Files").</li>
