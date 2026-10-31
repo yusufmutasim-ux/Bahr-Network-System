@@ -114,7 +114,7 @@ function startFakeGoogle() {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => {
     base = `http://127.0.0.1:${server.address().port}`;
     Object.assign(process.env, {
-      GOOGLE_CLIENT_ID: 'test-client', GOOGLE_CLIENT_SECRET: 'test-secret',
+      GOOGLE_CLIENT_ID: '1234-test.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'GOCSPX-test',
       GOOGLE_AUTH_URL: `${base}/auth`, GOOGLE_TOKEN_URL: `${base}/token`, GOOGLE_USERINFO_URL: `${base}/userinfo`,
       GOOGLE_REVOKE_URL: `${base}/revoke`, GOOGLE_DRIVE_API: `${base}/drive/v3`, GOOGLE_DRIVE_UPLOAD: `${base}/upload/drive/v3`,
     });
