@@ -23,6 +23,7 @@ const {
 const auth = require('./auth');
 const { registerCulture } = require('./culture');
 const { registerTasks, remindDueTasks } = require('./tasks');
+const { registerClients } = require('./clients');
 const { resolveMapLink } = require('./maplink');
 const push = require('./push');
 const drive = require('./drive');
@@ -1279,6 +1280,8 @@ function createApp(db, { now = () => new Date() } = {}) {
       ['Holidays', 'SELECT id, date, name FROM holidays ORDER BY date'],
       ['Task files', `SELECT f.id, f.task_id, t.title AS task, f.kind, f.name, f.size, f.mime, f.url, u.name AS added_by, f.created_at
                       FROM task_files f JOIN tasks t ON t.id = f.task_id LEFT JOIN users u ON u.id = f.user_id ORDER BY f.id`],
+      ['Clients', `SELECT c.id, c.name, c.color, c.active, m.name AS account_manager, c.notes, c.created_at
+                   FROM clients c LEFT JOIN users m ON m.id = c.manager_id ORDER BY c.name`],
       ['Tasks', `SELECT t.id, t.title, t.client, t.department, a.name AS assignee, c.name AS created_by, t.status, t.priority,
                         t.start_date, t.due_date, t.completed_at, t.created_at, t.description,
                         (SELECT COUNT(*) FROM task_items i WHERE i.task_id = t.id AND i.done = 1) || '/' ||
@@ -1447,6 +1450,7 @@ function createApp(db, { now = () => new Date() } = {}) {
     db, settings, localToday, now, fail, str, posInt, idParam, requireUser, requireOwner, attendanceStats, addPoints,
   });
   registerTasks(app, { db, settings, localToday, fail, str, posInt, idParam, requireUser, audit });
+  registerClients(app, { db, settings, localToday, fail, str, posInt, idParam, requireUser, audit });
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 

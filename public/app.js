@@ -918,6 +918,7 @@ const EMPLOYEE_NAV = [
   { group: 'Overview' },
   { key: '', label: 'My Activity', icon: 'activity', view: () => viewEmployeeHome() },
   { key: 'tasks', label: 'Tasks', icon: 'kanban', view: (p) => viewTasks(p), count: () => taskBadge() },
+  { key: 'clients', label: 'Clients', icon: 'briefcase', view: (p) => viewClients(p), show: () => !!taskMeta?.can_manage_clients },
   { key: 'profile', label: 'My Profile', icon: 'user', view: () => viewPerson(new URLSearchParams(`id=${me.id}`)) },
   { key: 'history', label: 'My History', icon: 'calendar', view: (p) => viewHistory(p) },
   { group: 'Team' },
@@ -941,6 +942,7 @@ const OWNER_NAV = [
   { key: 'payroll', label: 'Payroll', icon: 'receipt', view: (p) => viewPayroll(p) },
   { group: 'People' },
   { key: 'employees', label: 'Staff', icon: 'users', view: (p) => viewStaff(p) },
+  { key: 'clients', label: 'Clients', icon: 'briefcase', view: (p) => viewClients(p) },
   { key: 'points', label: 'Points', icon: 'star', view: () => viewPoints() },
   { group: 'Culture' },
   { key: 'wall', label: 'Team Wall', icon: 'heart', view: (p) => viewWall(p) },
@@ -1004,7 +1006,7 @@ function renderShell(active = parseHash().path) {
   paintThemeButtons();
 
   $('#nav').innerHTML = navItems()
-    .filter((n) => !n.hidden)
+    .filter((n) => !n.hidden && (!n.show || n.show()))
     .map((n) => {
       if (n.group) return `<div class="nav-group">${esc(n.group)}</div>`;
       const c = n.count ? n.count() : 0;
@@ -1039,7 +1041,7 @@ function renderShell(active = parseHash().path) {
 function openMore() {
   const dlg = $('#more');
   const active = parseHash().path;
-  const items = navItems().filter((n) => n.view && !n.hidden && !BOTTOM[me.role].includes(n.key));
+  const items = navItems().filter((n) => n.view && !n.hidden && (!n.show || n.show()) && !BOTTOM[me.role].includes(n.key));
   dlg.innerHTML = `<div class="card">
     <div class="row" style="gap:12px;margin-bottom:16px">${avatar(me.name, 'lg')}
       <div style="flex:1;min-width:0"><strong style="font-size:1.05rem">${esc(me.name)}</strong>
@@ -2892,10 +2894,10 @@ async function viewSettings() {
                <ol class="setup-steps small">
                  <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Google Cloud Console</a> with your Google account and create a project (e.g. "Bahr Files").</li>
                  <li>Go to <b>APIs &amp; Services → Library</b>, search <b>Google Drive API</b> and click <b>Enable</b>.</li>
-                 <li><b>OAuth consent screen</b>: choose <b>External</b>, fill the app name and your email, save. Then click <b>Publish app</b> so access doesn't expire after 7 days.</li>
-                 <li><b>Credentials → Create credentials → OAuth client ID</b> → <b>Web application</b>. Under <b>Authorized redirect URIs</b> add:
+                 <li><b>Google Auth Platform → Get started</b>: app name, your email, audience <b>External</b>. In <b>Branding</b> add the home page <code>${esc(location.origin)}</code>, privacy policy <code>${esc(location.origin)}/privacy.html</code>, terms <code>${esc(location.origin)}/terms.html</code> and the authorized domain <code>${esc(location.host)}</code>. Then <b>Audience → Publish app</b> so access doesn't expire after 7 days.</li>
+                 <li><b>Google Auth Platform → Clients → Create client</b> → <b>Web application</b>. Under <b>Authorized redirect URIs</b> add:
                    <div class="row mt" style="gap:6px"><input readonly value="${esc(dr.redirect_uri)}" id="redir"><button class="btn sm light" type="button" id="copy-redir">${icon('copy')}</button></div></li>
-                 <li>In <b>Vercel → your project → Settings → Environment Variables</b> add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> from the client you created, then <b>Redeploy</b>.</li>
+                 <li>In <b>Vercel → your project → Settings → Environments → Production → Environment Variables</b> add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> from the client you created, then <b>Redeploy</b>.</li>
                  <li>Come back here and tap <b>Connect Google Drive</b>.</li>
                </ol>`)
         + `<label class="f mt">Largest file per upload (GB)<input type="number" id="max-gb" value="${Math.round((s.max_upload_mb / 1024) * 10) / 10}" min="0.1" max="5000" step="0.1"></label>
@@ -3451,6 +3453,149 @@ async function viewMember(params) {
     ${historyLists(h)}`;
 }
 
+// ---------- Clients ----------
+
+const CLIENT_COLORS = ['lime', 'teal', 'pink', 'sky', 'amber', 'slate', 'violet', 'orange'];
+const clientChip = (name, color) => (name ? `<span class="chip client-chip"><i class="cdot c-${esc(color || 'slate')}"></i>${esc(name)}</span>` : '');
+const clientAvatar = (c, size = '') => `<span class="avatar ${size} client-av c-${esc(c.color || 'slate')}">${esc(initials(c.name))}</span>`;
+
+// Searchable client picker: a button showing the choice, opening an in-place list with search and "add new".
+function clientPickerHtml(clients, selectedId) {
+  const sel = clients.find((c) => c.id === selectedId);
+  return `<div class="cpick" id="cpick">
+    <input type="hidden" name="client_id" value="${sel ? sel.id : ''}">
+    <button type="button" class="cpick-btn" aria-haspopup="listbox" aria-expanded="false">
+      ${sel ? `${clientAvatar(sel, 'sm')}<span class="grow">${esc(sel.name)}</span>` : `<span class="avatar sm client-av c-slate">${icon('briefcase')}</span><span class="grow muted">Choose a client</span>`}
+      ${icon('chevron')}</button>
+    <div class="cpick-pop" hidden>
+      <div class="input-icon">${icon('search')}<input class="cpick-q" placeholder="Search clients…" autocomplete="off"></div>
+      <div class="cpick-list" role="listbox"></div>
+    </div>
+  </div>`;
+}
+
+function bindClientPicker(root, clients, { canAdd = false } = {}) {
+  const box = $('#cpick', root);
+  if (!box) return;
+  const hidden = $('input[name=client_id]', box);
+  const btn = $('.cpick-btn', box);
+  const pop = $('.cpick-pop', box);
+  const q = $('.cpick-q', box);
+  const list = $('.cpick-list', box);
+  let active = 0;
+  let shown = [];
+  const pick = (c) => {
+    hidden.value = c ? c.id : '';
+    btn.innerHTML = `${c ? `${clientAvatar(c, 'sm')}<span class="grow">${esc(c.name)}</span>` : `<span class="avatar sm client-av c-slate">${icon('briefcase')}</span><span class="grow muted">No client (internal)</span>`}${icon('chevron')}`;
+    close();
+    btn.focus();
+  };
+  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+  const draw = () => {
+    const term = q.value.trim().toLowerCase();
+    shown = clients.filter((c) => !term || c.name.toLowerCase().includes(term));
+    const exact = clients.some((c) => c.name.toLowerCase() === term);
+    active = Math.min(active, Math.max(0, shown.length - 1));
+    list.innerHTML = `${shown.map((c, i) => `<button type="button" class="cpick-item ${i === active ? 'on' : ''} ${String(c.id) === hidden.value ? 'sel' : ''}" data-i="${i}" role="option">
+        ${clientAvatar(c, 'sm')}<span class="grow"><strong>${esc(c.name)}</strong>${c.open_tasks ? `<span class="tiny muted">${c.open_tasks} open task${c.open_tasks === 1 ? '' : 's'}</span>` : ''}</span>
+        ${String(c.id) === hidden.value ? icon('check') : ''}</button>`).join('')}
+      ${!shown.length && !(canAdd && term) ? `<div class="cpick-empty muted small">${clients.length ? 'No client matches' : 'No clients yet'}${canAdd ? '' : '. Ask an account manager to add it.'}</div>` : ''}
+      ${canAdd && term && !exact ? `<button type="button" class="cpick-item cpick-add" data-add>${icon('plus')}<span class="grow">Add <b>${esc(q.value.trim())}</b> as a new client</span></button>` : ''}
+      ${hidden.value && !term ? `<button type="button" class="cpick-item cpick-none" data-none><span class="grow muted small">No client (internal work)</span></button>` : ''}`;
+    $$('[data-i]', list).forEach((b) => (b.onclick = () => pick(shown[b.dataset.i])));
+    $('[data-none]', list)?.addEventListener('click', () => pick(null));
+    $('[data-add]', list)?.addEventListener('click', (e) => act(e.currentTarget, async () => {
+      const c = await api('/clients', { method: 'POST', body: { name: q.value.trim() } });
+      const row = { ...c, open_tasks: 0 };
+      clients.unshift(row);
+      pick(row);
+    }, 'Client added'));
+  };
+  btn.onclick = () => {
+    if (!pop.hidden) return close();
+    pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    q.value = '';
+    active = Math.max(0, clients.findIndex((c) => String(c.id) === hidden.value));
+    draw();
+    q.focus();
+    $('.cpick-item.on', list)?.scrollIntoView({ block: 'nearest' });
+  };
+  q.oninput = () => { active = 0; draw(); };
+  q.onkeydown = (e) => {
+    if (e.key === 'ArrowDown') { active = Math.min(active + 1, shown.length - 1); draw(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { active = Math.max(active - 1, 0); draw(); e.preventDefault(); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (shown[active]) pick(shown[active]); else $('[data-add]', list)?.click(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); btn.focus(); }
+  };
+}
+
+function clientForm(c = null, people = []) {
+  const managers = people;
+  const color = c?.color || CLIENT_COLORS[Math.floor(Math.random() * CLIENT_COLORS.length)];
+  modal({
+    title: c ? `Edit ${c.name}` : 'New client',
+    body: `<div class="grid" style="gap:14px">
+      <label class="f">Client name<input name="name" maxlength="80" required value="${esc(c?.name || '')}" placeholder="e.g. Vodafone Egypt"></label>
+      <div class="f"><span>Colour</span><div class="swatches">${CLIENT_COLORS.map((k) => `<label class="swatch c-${k}" title="${k}"><input type="radio" name="color" value="${k}" ${k === color ? 'checked' : ''}><span></span></label>`).join('')}</div></div>
+      <label class="f">Account manager<select name="manager_id"><option value="">—</option>${managers.map((p) => `<option value="${p.id}" ${p.id === c?.manager_id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+      <label class="f">Notes <span class="muted tiny">(contacts, contract, brand links — visible to account managers)</span><textarea name="notes" maxlength="1000" rows="3">${esc(c?.notes || '')}</textarea></label>
+    </div>`,
+    submit: c ? 'Save' : 'Add client',
+    onSubmit: async (d) => {
+      const body = { ...d, manager_id: d.manager_id ? Number(d.manager_id) : null };
+      if (c) await api(`/clients/${c.id}`, { method: 'PATCH', body });
+      else { await api('/clients', { method: 'POST', body }); confetti({ count: 50 }); }
+      toast(c ? 'Saved' : `${d.name} added`, 'success');
+      route();
+    },
+  });
+}
+
+async function viewClients(params) {
+  const showArchived = params.get('show') === 'archived';
+  const [data, people] = await Promise.all([api(`/clients${showArchived ? '?all=1' : ''}`), api('/people').catch(() => [])]);
+  const rows = data.rows.filter((c) => (showArchived ? !c.active : c.active));
+  const managers = people.filter((p) => p.role === 'owner' || p.department === rules().am_department);
+  let q = '';
+  $('#app').innerHTML = `
+    ${pageHead('Clients', `${data.rows.filter((c) => c.active).length} active client${data.rows.filter((c) => c.active).length === 1 ? '' : 's'}`, data.can_manage ? `<button class="btn" id="new-client">${icon('plus')}New client</button>` : '')}
+    <div class="card" style="margin-bottom:16px"><div class="row wrap between">
+      <div class="input-icon" style="flex:1;min-width:200px;max-width:360px">${icon('search')}<input id="cq" placeholder="Search clients"></div>
+      ${data.can_manage ? `<div class="seg"><a href="#/clients" class="${showArchived ? '' : 'on'}">Active</a><a href="#/clients?show=archived" class="${showArchived ? 'on' : ''}">Archived</a></div>` : ''}
+    </div></div>
+    <div class="cards-grid" id="clients"></div>`;
+  const draw = () => {
+    const list = rows.filter((c) => !q || `${c.name} ${c.manager_name || ''}`.toLowerCase().includes(q));
+    $('#clients').innerHTML = list.length
+      ? list.map((c) => `<div class="card client-card" style="margin:0">
+          <div class="row" style="gap:12px">${clientAvatar(c, 'lg')}<div style="flex:1;min-width:0"><strong class="ellipsis" style="display:block;font-size:1.05rem">${esc(c.name)}</strong>
+            <span class="muted small">${c.manager_name ? `${icon('user')} ${esc(c.manager_name)}` : 'No account manager'}</span></div>
+            ${data.can_manage ? `<button class="icon-btn sm" data-edit="${c.id}" aria-label="Edit">${icon('pen')}</button>` : ''}</div>
+          <div class="client-stats">
+            <div><b class="num">${c.open_tasks}</b><span>open</span></div>
+            <div class="${c.overdue ? 'late' : ''}"><b class="num">${c.overdue}</b><span>late</span></div>
+            <div><b class="num">${c.done_30}</b><span>done · 30d</span></div>
+          </div>
+          ${c.notes ? `<p class="small muted client-notes">${esc(c.notes)}</p>` : ''}
+          <div class="row mt" style="gap:6px">
+            <a class="btn sm" href="#/tasks?scope=${me.role === 'owner' ? 'all' : me.role === 'lead' ? 'team' : 'created'}&client=${c.id}">${icon('kanban')}Tasks</a>
+            ${data.can_manage ? `<button class="btn sm light" data-archive="${c.id}">${c.active ? 'Archive' : 'Restore'}</button>` : ''}
+          </div></div>`).join('')
+      : `<div class="card" style="grid-column:1/-1">${empty('briefcase', showArchived ? 'No archived clients' : rows.length ? 'No client matches' : 'No clients yet. Add the brands you work with.', data.can_manage && !showArchived && !rows.length ? `<button class="btn sm" id="new-client-2">${icon('plus')}Add your first client</button>` : '')}</div>`;
+    $$('[data-edit]').forEach((b) => (b.onclick = () => clientForm(rows.find((c) => c.id === Number(b.dataset.edit)), managers)));
+    $$('[data-archive]').forEach((b) => (b.onclick = () => {
+      const c = rows.find((x) => x.id === Number(b.dataset.archive));
+      const run = async () => { await api(`/clients/${c.id}`, { method: 'PATCH', body: { active: !c.active } }); toast(c.active ? `${c.name} archived` : `${c.name} restored`, 'success'); route(); };
+      c.active ? confirmBox(`Archive ${c.name}?`, 'It disappears from the client list for new tasks. Its tasks and files stay as they are, and you can restore it any time.', run, { submit: 'Archive' }) : act(b, run);
+    }));
+    $('#new-client-2')?.addEventListener('click', () => clientForm(null, managers));
+  };
+  $('#cq').oninput = (e) => { q = e.target.value.trim().toLowerCase(); draw(); };
+  $('#new-client')?.addEventListener('click', () => clientForm(null, managers));
+  draw();
+}
+
 // ---------- Tasks ----------
 
 const TASK_STATUS = { todo: ['To do', 'slate'], in_progress: ['In progress', 'sky'], review: ['In review', 'amber'], done: ['Done', 'lime'] };
@@ -3475,7 +3620,7 @@ const assigneeHtml = (t, size = 'sm') => (t.assignee_name
 
 function taskCard(t) {
   return `<article class="task-card prio-${t.priority}" data-task="${t.id}" draggable="true" tabindex="0">
-    <div class="task-tags">${t.client ? `<span class="chip">${esc(t.client)}</span>` : ''}
+    <div class="task-tags">${clientChip(t.client, t.client_color)}
       ${t.priority === 'urgent' || t.priority === 'high' ? `<span class="chip ${PRIORITY[t.priority][1]}">${icon('flag')}${PRIORITY[t.priority][0]}</span>` : ''}
       ${me.role === 'owner' || taskMeta?.is_am ? `<span class="chip dept-chip">${esc(t.department)}</span>` : ''}</div>
     <h4>${esc(t.title)}</h4>
@@ -3554,7 +3699,7 @@ async function viewTasks(params) {
   let view = params.get('view') || store.get('taskView', 'board');
   if (!TASK_VIEWS[view]) view = 'board';
   let q = '';
-  let client = '';
+  let client = params.get('client') || '';
   let dept = '';
   let list = await api(`/tasks?scope=${scope}`);
   const today = localISODate();
@@ -3570,14 +3715,14 @@ async function viewTasks(params) {
     <div class="task-toolbar">
       <div class="seg" id="tview">${Object.entries(TASK_VIEWS).map(([k, [label, ic]]) => `<button type="button" data-v="${k}" class="${k === view ? 'on' : ''}">${icon(ic)}${label}</button>`).join('')}</div>
       <div class="input-icon task-search">${icon('search')}<input id="tq" placeholder="Search tasks"></div>
-      ${taskMeta.clients.length ? `<select id="tclient" class="task-filter"><option value="">All clients</option>${taskMeta.clients.map((c) => `<option>${esc(c)}</option>`).join('')}</select>` : ''}
+      ${taskMeta.clients.length ? `<select id="tclient" class="task-filter"><option value="">All clients</option>${taskMeta.clients.map((c) => `<option value="${c.id}" ${String(c.id) === client ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>` : ''}
       ${role === 'owner' || taskMeta.is_am ? `<select id="tdept" class="task-filter"><option value="">All departments</option>${(rules().departments || []).map((d) => `<option>${esc(d)}</option>`).join('')}</select>` : ''}
     </div>
     <div id="tasks"></div>`;
 
   const draw = () => {
     const rows = list
-      .filter((t) => !client || t.client === client)
+      .filter((t) => !client || String(t.client_id) === client)
       .filter((t) => !dept || t.department === dept)
       .filter((t) => !q || `${t.title} ${t.client || ''} ${t.description || ''} ${t.assignee_name || ''}`.toLowerCase().includes(q));
     $('#tasks').innerHTML = !list.length
@@ -3661,8 +3806,7 @@ function taskForm(t = null) {
     body: `<div class="grid" style="gap:14px">
       <label class="f">What needs doing?<input name="title" maxlength="140" required value="${esc(t?.title || '')}" placeholder="e.g. 3 reels for the Ramadan campaign"></label>
       <div class="form-grid two">
-        <label class="f">Client<input name="client" maxlength="80" list="client-list" value="${esc(t?.client || '')}" placeholder="e.g. Nike Egypt" autocomplete="off">
-          <datalist id="client-list">${m.clients.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></label>
+        <div class="f"><span>Client</span>${clientPickerHtml(m.clients, t?.client_id ?? null)}</div>
         <label class="f">Department<select name="department" required ${t && !t.can.change_department ? 'disabled' : ''}><option value="">Choose…</option>${depts.map((d) => `<option ${d === startDept ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
       </div>
       <div class="f"><span>Priority</span><div class="choice">${Object.entries(PRIORITY).map(([k, [label]]) => `<label><input type="radio" name="priority" value="${k}" ${(t?.priority || 'medium') === k ? 'checked' : ''}>${k === 'urgent' ? '🔥 ' : ''}${label}</label>`).join('')}</div></div>
@@ -3676,7 +3820,7 @@ function taskForm(t = null) {
     </div>`,
     submit: t ? 'Save' : 'Create task',
     onSubmit: async (d) => {
-      const body = { ...d, start_date: d.start_date || null, due_date: d.due_date || null };
+      const body = { ...d, start_date: d.start_date || null, due_date: d.due_date || null, client_id: d.client_id ? Number(d.client_id) : null };
       if (t) {
         if (!t.can.change_department) delete body.department;
         await api(`/tasks/${t.id}`, { method: 'PATCH', body });
@@ -3697,6 +3841,10 @@ function taskForm(t = null) {
   });
   // Show "Assign to" only for departments this person may assign in, with each member's workload.
   const form = $('#modal form');
+  // An archived client stays selectable on tasks that already use it.
+  const pickList = t?.client_id && !m.clients.some((c) => c.id === t.client_id) ? [{ id: t.client_id, name: t.client, color: t.client_color, open_tasks: 0 }, ...m.clients] : m.clients;
+  if (pickList !== m.clients) $('#cpick', form).outerHTML = clientPickerHtml(pickList, t.client_id);
+  bindClientPicker(form, pickList, { canAdd: m.can_manage_clients });
   const syncAssign = () => {
     const wrap = $('#assign-wrap', form);
     if (!wrap) return;
@@ -3732,7 +3880,7 @@ async function openTask(id) {
   dlg.dataset.task = id;
   dlg.innerHTML = `<div class="card">
     <div class="row between" style="align-items:flex-start;gap:10px">
-      <div class="task-tags">${chip(TASK_STATUS, t.status)}<span class="chip ${PRIORITY[t.priority][1]}">${icon('flag')}${PRIORITY[t.priority][0]}</span>${t.client ? `<span class="chip">${esc(t.client)}</span>` : ''}</div>
+      <div class="task-tags">${chip(TASK_STATUS, t.status)}<span class="chip ${PRIORITY[t.priority][1]}">${icon('flag')}${PRIORITY[t.priority][0]}</span>${clientChip(t.client, t.client_color)}</div>
       <div class="row" style="gap:6px">${t.can.manage ? `<button class="icon-btn sm" data-act="edit" aria-label="Edit">${icon('pen')}</button>` : ''}
         ${t.can.delete ? `<button class="icon-btn sm" data-act="delete" aria-label="Delete task" title="Delete task">${icon('trash')}</button>` : ''}
         <button class="icon-btn ghost" data-close aria-label="Close">${icon('x')}</button></div>

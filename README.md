@@ -39,6 +39,7 @@ Staff attendance and management system for Bahr Network. It covers GPS check-in,
 
 **Tasks** (account managers ↔ departments)
 - Account managers (members of the department chosen in Settings → Team & culture, *Account Management* by default), team leads and owners create tasks: client, department, priority, start/due dates, brief and a checklist.
+- **Clients** page (owners and account managers): each client has a colour, an account manager, notes and live counts of open, late and recently finished tasks. Task forms pick the client from a searchable list (new clients can be added right there); archived clients disappear from the list but keep their history.
 - A new task goes to the **department lead's "To assign" inbox**. The lead assigns it to someone on the team and sees each person's open-task count. Owners can assign anyone directly.
 - Everyone sees **their own tasks**; leads see their whole department; owners see everything.
 - Flow: *To do → In progress → In review → Done*. The assignee sends it for review; the account manager or lead approves it or sends it back with a comment.

@@ -1,5 +1,6 @@
 const push = require('./push');
 const drive = require('./drive');
+const { resolveClient, canManageClients } = require('./clients');
 
 // Client work between account managers and departments.
 //  - Account managers (members of settings.am_department), leads and owners create tasks for a department.
@@ -69,8 +70,10 @@ function registerTasks(app, ctx) {
            (SELECT COUNT(*) FROM task_items i WHERE i.task_id = t.id) AS items_total,
            (SELECT COUNT(*) FROM task_items i WHERE i.task_id = t.id AND i.done = 1) AS items_done,
            (SELECT COUNT(*) FROM task_comments m WHERE m.task_id = t.id AND m.kind = 'comment') AS comments,
-           (SELECT COUNT(*) FROM task_files f WHERE f.task_id = t.id) AS files
-    FROM tasks t LEFT JOIN users a ON a.id = t.assignee_id LEFT JOIN users c ON c.id = t.created_by`;
+           (SELECT COUNT(*) FROM task_files f WHERE f.task_id = t.id) AS files,
+           cl.color AS client_color
+    FROM tasks t LEFT JOIN users a ON a.id = t.assignee_id LEFT JOIN users c ON c.id = t.created_by
+         LEFT JOIN clients cl ON cl.id = t.client_id`;
   const shape = (r) => {
     const { drive_folder_id: _folder, ...rest } = r;
     return { ...rest, items_total: Number(r.items_total), items_done: Number(r.items_done), comments: Number(r.comments), files: Number(r.files) };
@@ -101,7 +104,10 @@ function registerTasks(app, ctx) {
       where.push('t.department = ?');
       params.push(str(req.query.department, 40));
     }
-    if (req.query.client) {
+    if (posInt(req.query.client_id)) {
+      where.push('t.client_id = ?');
+      params.push(posInt(req.query.client_id));
+    } else if (req.query.client) {
       where.push('t.client = ?');
       params.push(str(req.query.client, 80));
     }
@@ -127,7 +133,11 @@ function registerTasks(app, ctx) {
     const s = await settings();
     const u = req.user;
     const [clients, people, counts] = await Promise.all([
-      db.all(`SELECT client, COUNT(*) AS n FROM tasks WHERE client IS NOT NULL AND client <> '' GROUP BY client ORDER BY n DESC, client LIMIT 100`),
+      db.all(
+        `SELECT c.id, c.name, c.color, COUNT(t.id) FILTER (WHERE t.status <> 'done') AS open_tasks
+         FROM clients c LEFT JOIN tasks t ON t.client_id = c.id
+         WHERE c.active = 1 GROUP BY c.id ORDER BY MAX(t.created_at) DESC NULLS LAST, c.name LIMIT 500`,
+      ),
       db.all(
         `SELECT u.id, u.name, u.role, u.job_title, u.department,
                 (SELECT COUNT(*) FROM tasks t WHERE t.assignee_id = u.id AND t.status <> 'done') AS open_tasks
@@ -146,7 +156,8 @@ function registerTasks(app, ctx) {
       is_am: isAM(u, s),
       am_department: s.am_department,
       departments: s.departments.filter((d) => d !== s.am_department || u.role === 'owner'),
-      clients: clients.map((c) => c.client),
+      clients: clients.map((c) => ({ ...c, open_tasks: Number(c.open_tasks) })),
+      can_manage_clients: canManageClients(u, s),
       // Leads assign within their department; owners anywhere.
       people: people
         .filter((p) => u.role === 'owner' || (u.role === 'lead' && p.department === u.department))
@@ -172,11 +183,12 @@ function registerTasks(app, ctx) {
       ? await assigneeFor(department, posInt(b.assignee_id))
       : null;
     const items = (Array.isArray(b.items) ? b.items : []).map((x) => str(x, 200)).filter(Boolean).slice(0, MAX_ITEMS);
+    const client = await resolveClient(db, u, s, b, fail);
     const t = await db.tx(async (tx) => {
       const t = await tx.get(
-        `INSERT INTO tasks (title, description, client, department, assignee_id, created_by, priority, start_date, due_date, assigned_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-        [title, str(b.description, 4000) || null, str(b.client, 80) || null, department, assignee?.id || null, u.id, priority,
+        `INSERT INTO tasks (title, description, client, client_id, department, assignee_id, created_by, priority, start_date, due_date, assigned_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        [title, str(b.description, 4000) || null, client?.name || null, client?.id || null, department, assignee?.id || null, u.id, priority,
           start, due, assignee ? new Date().toISOString() : null],
       );
       for (const [i, text] of items.entries()) {
@@ -240,12 +252,20 @@ function registerTasks(app, ctx) {
     const events = [];
     const after = [];
 
-    for (const k of ['title', 'description', 'client', 'priority', 'start_date', 'due_date']) {
+    if (b.client_id !== undefined || b.client !== undefined) {
+      if (!manager) fail('Only the task owner or the department lead can edit the details', 403);
+      const c = b.client_id || b.client ? await resolveClient(db, u, s, b, fail, { requireActive: false }) : null;
+      if ((c?.id || null) !== t.client_id) {
+        fields.client_id = c?.id || null;
+        fields.client = c?.name || null;
+        events.push(c ? `set the client to ${c.name}` : 'removed the client');
+      }
+    }
+    for (const k of ['title', 'description', 'priority', 'start_date', 'due_date']) {
       if (b[k] === undefined) continue;
       if (!manager) fail('Only the task owner or the department lead can edit the details', 403);
       if (k === 'title') fields.title = str(b.title, 140) || fail('Title is required');
       else if (k === 'description') fields.description = str(b.description, 4000) || null;
-      else if (k === 'client') fields.client = str(b.client, 80) || null;
       else if (k === 'priority') fields.priority = PRIORITIES.includes(b.priority) ? b.priority : fail('Invalid priority');
       else fields[k] = optDate(b[k], k.replace('_', ' '));
     }

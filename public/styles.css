@@ -1140,3 +1140,45 @@ dialog.task-modal .card { max-height: 88vh; overflow-y: auto; }
 }
 .auth-legal { text-align: center; margin-top: 14px; font-size: .8rem; color: var(--muted); }
 .auth-legal a { color: inherit; }
+
+/* ============ Clients ============ */
+.c-lime { --c: #8cc63f; } .c-teal { --c: #2bb3a0; } .c-pink { --c: #e9577a; } .c-sky { --c: #3b8fd6; }
+.c-amber { --c: #e6a020; } .c-slate { --c: #7d8b88; } .c-violet { --c: #8b5cf6; } .c-orange { --c: #f07c3a; }
+.cdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: 0 0 auto; }
+.client-chip { gap: 6px; }
+.avatar.client-av { background: color-mix(in srgb, var(--c) 22%, var(--surface-solid)); color: color-mix(in srgb, var(--c) 75%, var(--ink)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 35%, transparent); }
+.avatar.client-av .i { width: 14px; height: 14px; }
+.cpick { position: relative; }
+.cpick-btn {
+  width: 100%; height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 6px; font: inherit; color: inherit; text-align: left; cursor: pointer;
+  border: 1px solid var(--line-2); border-radius: var(--radius-sm); background: var(--surface-solid);
+}
+.cpick-btn .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.cpick-btn[aria-expanded="true"] { border-color: var(--focus); box-shadow: 0 0 0 4px color-mix(in srgb, var(--focus) 20%, transparent); }
+.cpick-btn > .i:last-child { width: 16px; height: 16px; color: var(--muted); transition: transform .2s; }
+.cpick-btn[aria-expanded="true"] > .i:last-child { transform: rotate(180deg); }
+.cpick-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: max(100%, 320px); max-width: calc(100vw - 48px); padding: 8px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-solid); box-shadow: var(--shadow-lg, var(--shadow)); animation: fadeUp .18s ease-out; }
+.cpick-pop .input-icon input { height: 40px; }
+.cpick-list { max-height: 240px; overflow-y: auto; margin-top: 6px; display: grid; gap: 2px; }
+.cpick-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border: 0; border-radius: 10px; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.cpick-item .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.cpick-item strong { font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cpick-item.on, .cpick-item:hover { background: var(--sunken); }
+.cpick-item.sel .i { color: var(--green); }
+.cpick-add { color: var(--green); font-weight: 600; }
+.cpick-add .i { width: 18px; height: 18px; margin: 0 6px; }
+.cpick-empty { padding: 12px 8px; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch input { position: absolute; opacity: 0; pointer-events: none; }
+.swatch span { display: block; width: 32px; height: 32px; border-radius: 50%; background: var(--c); cursor: pointer; box-shadow: 0 0 0 2px var(--surface-solid), 0 0 0 3px transparent; transition: box-shadow .15s, transform .15s; }
+.swatch input:checked + span { box-shadow: 0 0 0 2px var(--surface-solid), 0 0 0 4px var(--c); transform: scale(1.05); }
+.swatch input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 4px; }
+.client-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
+.client-stats > div { background: var(--sunken); border-radius: 12px; padding: 8px 10px; display: flex; flex-direction: column; }
+.client-stats b { font-size: 1.25rem; line-height: 1.1; }
+.client-stats span { font-size: .7rem; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.client-stats .late b { color: var(--red); }
+.client-notes { margin-top: 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cpick-add .grow { display: block; }

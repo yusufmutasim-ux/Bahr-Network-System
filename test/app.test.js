@@ -597,6 +597,46 @@ test('task files: links, Google Drive connect, chunked direct upload, sync and s
   }
 });
 
+test('clients: a managed list that tasks pick from', async () => {
+  const am = client(UA.phone); // Amira's laptop slot is taken by the earlier test
+  await am('/login', { method: 'POST', body: { username: 'amira', password: 'pass123' } });
+  // Tasks created earlier with typed client names were turned into clients.
+  const listed = (await am('/clients')).body;
+  assert.equal(listed.can_manage, true);
+  assert.ok(listed.rows.some((c) => c.name === 'Nike'));
+  assert.equal((await dina('/clients', { method: 'POST', body: { name: 'Nope Co' } })).status, 403);
+  const add = await am('/clients', { method: 'POST', body: { name: 'Vodafone Egypt', color: 'pink' } });
+  assert.equal(add.status, 201);
+  assert.equal((await am('/clients', { method: 'POST', body: { name: 'vodafone egypt' } })).status, 409);
+  // The AM who added it becomes its account manager.
+  assert.equal(add.body.manager_id, (await am('/me')).body.user.id);
+
+  const t = await am('/tasks', { method: 'POST', body: { title: 'Ramadan OOH', client_id: add.body.id, department: 'Design' } });
+  assert.equal(t.status, 201);
+  assert.equal(t.body.client, 'Vodafone Egypt');
+  // A lead can't invent clients by typing a new name.
+  const typed = await lead('/tasks', { method: 'POST', body: { title: 'x', client: 'Brand New Co', department: 'Design' } });
+  assert.equal(typed.status, 400);
+  assert.match(typed.body.error, /Pick a client/);
+  assert.equal((await lead('/tasks', { method: 'POST', body: { title: 'y', client: 'vodafone EGYPT', department: 'Design' } })).body.client_id, add.body.id);
+  const meta = (await lead('/tasks/meta')).body;
+  assert.ok(meta.clients.find((c) => c.id === add.body.id).open_tasks >= 2);
+  assert.equal(meta.can_manage_clients, false);
+
+  // Renaming updates the tasks; archiving hides it from pickers and blocks new tasks.
+  await am(`/clients/${add.body.id}`, { method: 'PATCH', body: { name: 'Vodafone EG' } });
+  assert.equal((await am(`/tasks/${t.body.id}`)).body.client, 'Vodafone EG');
+  assert.equal((await owner(`/tasks?scope=all&client_id=${add.body.id}`)).body.length, 2);
+  await am(`/clients/${add.body.id}`, { method: 'PATCH', body: { active: false } });
+  assert.ok(!(await lead('/tasks/meta')).body.clients.some((c) => c.id === add.body.id));
+  assert.equal((await am('/tasks', { method: 'POST', body: { title: 'z', client_id: add.body.id, department: 'Design' } })).status, 400);
+  assert.ok((await am('/clients?all=1')).body.rows.some((c) => c.id === add.body.id && !c.active));
+  // Switching a task to another client.
+  const nike = listed.rows.find((c) => c.name === 'Nike');
+  await am(`/tasks/${t.body.id}`, { method: 'PATCH', body: { client_id: nike.id } });
+  assert.equal((await am(`/tasks/${t.body.id}`)).body.client, 'Nike');
+});
+
 test('rejects non-JSON writes', async () => {
   const res = await fetch(`${base}/api/login`, { method: 'POST', body: 'username=a&password=b', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
   assert.equal(res.status, 415);

@@ -262,6 +262,26 @@ CREATE TABLE IF NOT EXISTS task_files (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS task_files_task ON task_files (task_id, id);
+
+-- The agency's clients, picked from a list when creating tasks.
+CREATE TABLE IF NOT EXISTS clients (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT 'sky',
+  notes TEXT,
+  manager_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS clients_name ON clients (lower(name));
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL;
+-- Clients typed into tasks before the list existed become real clients (idempotent).
+INSERT INTO clients (name)
+  SELECT DISTINCT ON (lower(trim(client))) trim(client) FROM tasks
+  WHERE client IS NOT NULL AND trim(client) <> '' AND client_id IS NULL
+  ON CONFLICT DO NOTHING;
+UPDATE tasks t SET client_id = c.id FROM clients c
+  WHERE t.client_id IS NULL AND t.client IS NOT NULL AND lower(trim(t.client)) = lower(c.name);
 `;
 
 const DEFAULT_SETTINGS = {
