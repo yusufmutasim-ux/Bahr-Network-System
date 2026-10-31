@@ -44,9 +44,15 @@ Staff attendance and management system for Bahr Network. It covers GPS check-in,
 - Everyone sees **their own tasks**; leads see their whole department; owners see everything.
 - Flow: *To do → In progress → In review → Done*. The assignee sends it for review; the account manager or lead approves it or sends it back with a comment.
 - Board (drag & drop between columns), List and Timeline (Gantt) views, search and client/department filters, a comment thread with history on every task, and a "My tasks" card on the home page.
+- Board, List, **Calendar** (month view of due dates, coloured by client) and Timeline views.
+- **@mentions** in comments: type `@` to pick a teammate; they're notified and can follow the task even outside their department.
+- **On-time delivery points**: finishing a task by its due date gives the assignee green points (Settings → Team & culture, 1 by default, once per task). Tasks done / on time show in the monthly report and the leaderboard.
+- **Client report** (per client and month): delivered, on-time rate, still open, files delivered. Printable / PDF.
+- **Department report** for each team lead: attendance, hours, tasks delivered and on-time rate, work per client, and a **team ranking** with the month's top performers (score: +1 per day present, +1 early, +2 per task done, +2 on time, +1 per kudos, −1 late, −3 absence). The lead adds highlights and sends it to the owners, who see which departments have reported.
 - Push notifications for new, assigned, review, approved, sent-back and commented tasks, plus a morning reminder for tasks due today or overdue.
 - **Files on every task**: upload deliverables (videos, designs, PDFs…) straight to the company's **Google Drive**, or add a link (WeTransfer, Frame.io…).
   - Files go from the browser directly to Drive in 16 MB chunks, so size isn't limited by the server (default max 20 GB per file, changeable). A dropped connection resumes where it stopped.
+  - A full Excel backup is saved to `Bahr Network Files / Backups` every morning (last 30 kept), or on demand from Settings.
   - They're filed as `Bahr Network Files / <client> / #<task> <title>` and shared by link so the team can open them. Removing a file moves it to the Drive trash.
 
 **Culture & engagement** (built for a creative / marketing agency)

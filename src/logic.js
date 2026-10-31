@@ -193,9 +193,21 @@ async function runAbsenceJob(db, settings, now = new Date(), lookbackDays = 45) 
   return r.changes;
 }
 
+// Tasks finished in the month per assignee: done, on time (by the due date or no due date) and late.
+async function taskStats(db, settings, month) {
+  const rows = await db.all(
+    `SELECT assignee_id, COUNT(*) AS done,
+            COUNT(*) FILTER (WHERE due_date IS NULL OR to_char(completed_at AT TIME ZONE ?, 'YYYY-MM-DD') <= due_date) AS on_time
+     FROM tasks WHERE status = 'done' AND assignee_id IS NOT NULL AND to_char(completed_at AT TIME ZONE ?, 'YYYY-MM') = ?
+     GROUP BY assignee_id`,
+    [settings.timezone, settings.timezone, month],
+  );
+  return new Map(rows.map((r) => [r.assignee_id, { done: Number(r.done), on_time: Number(r.on_time), late: Number(r.done) - Number(r.on_time) }]));
+}
+
 async function monthReport(db, settings, month) {
   const { first, last } = monthBounds(month);
-  const [users, att, leaves, bal] = await Promise.all([
+  const [users, att, leaves, bal, taskRows] = await Promise.all([
     db.all(
       `SELECT id, name, username, role, job_title, department, active, salary FROM users WHERE role <> 'owner' ORDER BY name`,
     ),
@@ -209,8 +221,10 @@ async function monthReport(db, settings, month) {
       [last, first],
     ),
     balancesByUser(db, month),
+    taskStats(db, settings, month),
   ]);
   return users.map((u) => {
+    const tk = taskRows.get(u.id) || { done: 0, on_time: 0, late: 0 };
     const us = scheduleFor(settings, u.department);
     const mine = att.filter((x) => x.user_id === u.id);
     const a = {
@@ -260,6 +274,9 @@ async function monthReport(db, settings, month) {
       daily_hours: Number(us.daily_hours),
       worked_minutes: worked,
       overtime_minutes: overtime,
+      tasks_done: tk.done,
+      tasks_on_time: tk.on_time,
+      tasks_late: tk.late,
       green_month: b.month.green,
       green_balance: b.green,
       red,
@@ -309,6 +326,7 @@ async function payroll(db, settings, month) {
 }
 
 module.exports = {
+  taskStats,
   RuleError,
   distanceMeters,
   isWorkDay,

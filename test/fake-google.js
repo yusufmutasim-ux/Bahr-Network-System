@@ -72,6 +72,16 @@ function startFakeGoogle() {
     }
 
     if (!authed(req)) return json(res, 401, { error: { message: 'Invalid Credentials' } });
+    if (u.pathname === '/upload/drive/v3/files' && req.method === 'POST' && u.searchParams.get('uploadType') === 'multipart') {
+      const boundary = (req.headers['content-type'] || '').match(/boundary=(\S+)/)?.[1];
+      const raw = await read(req);
+      const parts = raw.toString('latin1').split(`--${boundary}`);
+      const meta = JSON.parse(parts[1].split('\r\n\r\n')[1]);
+      const data = Buffer.from(parts[2].split('\r\n\r\n').slice(1).join('\r\n\r\n').replace(/\r\n$/, ''), 'latin1');
+      const f = { ...meta, id: crypto.randomBytes(6).toString('hex'), size: data.length, trashed: false, data };
+      files.set(f.id, f);
+      return json(res, 200, pick(f));
+    }
     if (u.pathname === '/upload/drive/v3/files' && req.method === 'POST') {
       const meta = JSON.parse((await read(req)).toString());
       const id = crypto.randomBytes(6).toString('hex');

@@ -24,6 +24,7 @@ const auth = require('./auth');
 const { registerCulture } = require('./culture');
 const { registerTasks, remindDueTasks } = require('./tasks');
 const { registerClients } = require('./clients');
+const { registerReports } = require('./reports');
 const { resolveMapLink } = require('./maplink');
 const push = require('./push');
 const drive = require('./drive');
@@ -303,7 +304,14 @@ function createApp(db, { now = () => new Date() } = {}) {
       });
     }
     const tasks = await remindDueTasks(db, t.date);
-    res.json({ added, reminded, tasks });
+    let backup = null;
+    try {
+      backup = await backupToDrive(s);
+    } catch (err) {
+      console.error('[backup] failed', err.message);
+      backup = { error: err.message };
+    }
+    res.json({ added, reminded, tasks, backup });
   });
 
   // Weekly (Vercel Cron, Thursday afternoon): a summary of the week for the owners.
@@ -729,6 +737,7 @@ function createApp(db, { now = () => new Date() } = {}) {
       .map((r) => ({
         user_id: r.user_id, name: r.name, job_title: r.job_title, department: r.department, green: r.green_month, red: r.red,
         black: r.black, early: r.early, days_present: r.days_present,
+        tasks_done: r.tasks_done, tasks_on_time: r.tasks_on_time,
       }))
       .sort((a, b) => b.green - a.green || a.red + a.black * 2 - (b.red + b.black * 2) || b.days_present - a.days_present);
     // Department battle: average score per member so small teams can win too.
@@ -1196,6 +1205,7 @@ function createApp(db, { now = () => new Date() } = {}) {
       }
     }
     const files = await db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM task_files WHERE kind = 'drive'`);
+    const lastBackup = await db.get(`SELECT value FROM settings WHERE key = 'drive_backup_last'`);
     res.json({
       configured: drive.configured(),
       config_problem: drive.configProblem(),
@@ -1208,6 +1218,7 @@ function createApp(db, { now = () => new Date() } = {}) {
       redirect_uri: callbackUrl(req),
       files: Number(files.n),
       bytes: Number(files.bytes),
+      last_backup: lastBackup ? JSON.parse(lastBackup.value) : null,
     });
   });
 
@@ -1257,9 +1268,8 @@ function createApp(db, { now = () => new Date() } = {}) {
   });
 
   // Full backup: one sheet per table (passwords, sessions and device hashes are left out).
-  app.get('/api/admin/export.xlsx', requireOwner, async (req, res) => {
+  async function buildBackup(s) {
     const ExcelJS = require('exceljs');
-    const s = await settings();
     const wb = new ExcelJS.Workbook();
     wb.creator = s.company_name;
     wb.created = now();
@@ -1308,11 +1318,41 @@ function createApp(db, { now = () => new Date() } = {}) {
       if (k !== 'holiday_dates') settingsSheet.addRow({ k, v: typeof v === 'object' ? JSON.stringify(v) : v });
     }
     settingsSheet.getRow(1).font = { bold: true };
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  app.get('/api/admin/export.xlsx', requireOwner, async (req, res) => {
+    const s = await settings();
+    const buf = await buildBackup(s);
     await audit(req.user, 'data.export', 'Full Excel backup');
-    const date = localToday(s).date;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="bahr-backup-${date}.xlsx"`);
-    res.send(Buffer.from(await wb.xlsx.writeBuffer()));
+    res.setHeader('Content-Disposition', `attachment; filename="bahr-backup-${localToday(s).date}.xlsx"`);
+    res.send(buf);
+  });
+
+  // Daily copy of the full backup in the connected Google Drive (Bahr Network Files / Backups), keeping the last 30.
+  async function backupToDrive(s) {
+    const st = await drive.getState(db);
+    if (!st?.refresh_token || s.drive_backup === false) return null;
+    const date = localToday(s).date;
+    const info = await drive.saveBackup(db, `bahr-backup-${date}.xlsx`, await buildBackup(s), 30);
+    await db.run(
+      `INSERT INTO settings (key, value) VALUES ('drive_backup_last', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+      [JSON.stringify({ ...info, at: now().toISOString() })],
+    );
+    return info;
+  }
+
+  app.post('/api/admin/drive/backup', requireOwner, async (req, res) => {
+    let info;
+    try {
+      info = await backupToDrive({ ...(await settings()), drive_backup: true });
+    } catch (err) {
+      fail(err.message, 502);
+    }
+    if (!info) fail('Connect Google Drive first');
+    await audit(req.user, 'data.backup', `Backup saved to Google Drive: ${info.name}`);
+    res.json(info);
   });
 
   app.get('/api/admin/settings', requireOwner, async (req, res) => res.json(await settings()));
@@ -1449,8 +1489,9 @@ function createApp(db, { now = () => new Date() } = {}) {
   registerCulture(app, {
     db, settings, localToday, now, fail, str, posInt, idParam, requireUser, requireOwner, attendanceStats, addPoints,
   });
-  registerTasks(app, { db, settings, localToday, fail, str, posInt, idParam, requireUser, audit });
+  registerTasks(app, { db, settings, localToday, fail, str, posInt, idParam, requireUser, audit, addPoints, now });
   registerClients(app, { db, settings, localToday, fail, str, posInt, idParam, requireUser, audit });
+  registerReports(app, { db, settings, localToday, fail, str, posInt, requireUser, audit });
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
@@ -1469,7 +1510,7 @@ function pickRules(s) {
   const keys = [
     'company_name', 'currency', 'early_start', 'early_end', 'late_after', 'very_late_after', 'close',
     'very_late_reds', 'work_days', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'radius_m',
-    'departments', 'kudos_daily_limit', 'kudos_green', 'daily_hours', 'annual_leave_days', 'sick_leave_days', 'am_department',
+    'departments', 'kudos_daily_limit', 'kudos_green', 'daily_hours', 'annual_leave_days', 'sick_leave_days', 'am_department', 'task_green',
   ];
   return { ...Object.fromEntries(keys.map((k) => [k, s[k]])), location_set: s.office_lat != null };
 }
@@ -1528,6 +1569,8 @@ function validateSettings(s) {
   out.dept_schedules = validateSchedules(s.dept_schedules, out.departments);
   out.am_department = out.departments.includes(s.am_department) ? s.am_department : '';
   num('max_upload_mb', 1, 5 * 1024 * 1024);
+  out.drive_backup = s.drive_backup !== false;
+  num('task_green', 0, 10);
   delete out.holiday_dates;
   return out;
 }

@@ -195,6 +195,38 @@ const shareByLink = (db, fileId) =>
 
 const trashFile = (db, fileId) => api(db, `/files/${fileId}`, { method: 'PATCH', body: { trashed: true } }).catch(() => null);
 
+// Small server-side uploads (the daily backup). Large files never go through here.
+async function uploadBuffer(db, { name, mime, data, parentId }) {
+  const boundary = `bahr${crypto.randomBytes(12).toString('hex')}`;
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: [parentId] })}\r\n--${boundary}\r\nContent-Type: ${mime}\r\n\r\n`),
+    data,
+    Buffer.from(`\r\n--${boundary}--`),
+  ]);
+  const token = await accessToken(db);
+  const res = await fetch(`${url('upload')}/files?uploadType=multipart&fields=id,name,size`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new DriveError(out.error?.message || `Backup upload failed (${res.status})`);
+  return out;
+}
+
+// Saves today's backup in "Bahr Network Files / Backups", replacing a same-day copy and keeping the newest `keep`.
+async function saveBackup(db, name, data, keep = 30) {
+  const st = await getState(db);
+  const root = st.root_id || (await ensureFolder(db, 'Bahr Network Files', null));
+  const folder = await ensureFolder(db, 'Backups', root);
+  const before = await listFolder(db, folder);
+  for (const f of before.filter((x) => x.name === name)) await trashFile(db, f.id);
+  const file = await uploadBuffer(db, { name, mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', data, parentId: folder });
+  const backups = (await listFolder(db, folder)).filter((f) => /^bahr-backup-\d{4}-\d{2}-\d{2}\.xlsx$/.test(f.name)).sort((a, b) => b.name.localeCompare(a.name));
+  for (const old of backups.slice(keep)) await trashFile(db, old.id);
+  return { id: file.id, name, size: data.length, kept: Math.min(backups.length, keep) };
+}
+
 async function about(db) {
   const a = await api(db, '/about', { query: { fields: 'storageQuota,user(emailAddress)' } });
   return { limit: Number(a.storageQuota?.limit || 0), usage: Number(a.storageQuota?.usage || 0), email: a.user?.emailAddress || null };
@@ -210,5 +242,5 @@ async function disconnect(db) {
 }
 
 module.exports = {
-  DriveError, configured, configProblem, getState, startAuth, finishAuth, createUpload, listFolder, shareByLink, trashFile, about, disconnect, taskFolder,
+  DriveError, configured, configProblem, getState, saveBackup, startAuth, finishAuth, createUpload, listFolder, shareByLink, trashFile, about, disconnect, taskFolder,
 };

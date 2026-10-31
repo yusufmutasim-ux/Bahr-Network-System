@@ -15,7 +15,7 @@ const STATUS_LABEL = { todo: 'To do', in_progress: 'In progress', review: 'In re
 const MAX_ITEMS = 50;
 
 function registerTasks(app, ctx) {
-  const { db, settings, localToday, fail, str, posInt, idParam, requireUser, audit } = ctx;
+  const { db, settings, localToday, fail, str, posInt, idParam, requireUser, audit, addPoints, now } = ctx;
   const isDate = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v));
   const optDate = (v, label) => (v === '' || v == null ? null : isDate(v) ? v : fail(`Invalid ${label}`));
 
@@ -28,8 +28,8 @@ function registerTasks(app, ctx) {
   // Rows (aliased t) this user may see.
   function visible(user) {
     if (user.role === 'owner') return { sql: 'TRUE', params: [] };
-    const parts = ['t.assignee_id = ?', 't.created_by = ?'];
-    const params = [user.id, user.id];
+    const parts = ['t.assignee_id = ?', 't.created_by = ?', 'EXISTS (SELECT 1 FROM task_watchers w WHERE w.task_id = t.id AND w.user_id = ?)'];
+    const params = [user.id, user.id, user.id];
     if (user.role === 'lead' && user.department) {
       parts.push('t.department = ?');
       params.push(user.department);
@@ -87,8 +87,9 @@ function registerTasks(app, ctx) {
     const params = [...v.params];
     const scope = req.query.scope || 'mine';
     if (scope === 'mine') {
-      where.push('t.assignee_id = ?');
-      params.push(u.id);
+      // Mine = assigned to me, plus tasks I was @mentioned on.
+      where.push('(t.assignee_id = ? OR EXISTS (SELECT 1 FROM task_watchers w WHERE w.task_id = t.id AND w.user_id = ?))');
+      params.push(u.id, u.id);
     } else if (scope === 'created') {
       where.push('t.created_by = ?');
       params.push(u.id);
@@ -312,6 +313,7 @@ function registerTasks(app, ctx) {
         after.push(async () => notify([t.created_by, ...(await deptManagers(department))], u, { title: `👀 Ready for review: ${t.title}`, body: `${u.name} finished it. Approve it or send it back.`, url: taskUrl(t.id), tag }));
       } else if (b.status === 'done') {
         after.push(() => notify([assigned, t.created_by], u, { title: `✅ Done: ${t.title}`, body: `Approved by ${u.name}. Great work!`, url: taskUrl(t.id), tag }));
+        after.push(() => awardOnTime({ ...t, assignee_id: assigned, due_date: due }, s));
       } else if (back) {
         after.push(() => notify([assigned], u, { title: `↩️ Changes needed: ${t.title}`, body: `${u.name} sent it back. Check the comments.`, url: taskUrl(t.id), tag }));
       }
@@ -375,6 +377,23 @@ function registerTasks(app, ctx) {
     await db.run('DELETE FROM task_items WHERE id = ? AND task_id = ?', [posInt(req.params.itemId) || 0, t.id]);
     res.json({ ok: true });
   });
+
+  // Delivered by the due date → green point(s) for the assignee, once per task.
+  async function awardOnTime(t, s) {
+    const today = localToday(s).date;
+    if (!s.task_green || !t.assignee_id || !t.due_date || today > t.due_date) return;
+    try {
+      await addPoints(db, {
+        userId: t.assignee_id, kind: 'green', delta: Number(s.task_green), workDate: today,
+        source: 'task', reason: `On-time delivery: ${t.title}`.slice(0, 300), refId: t.id,
+      });
+      await push.notifyUsers(db, [t.assignee_id], {
+        title: `🟢 +${s.task_green} green for delivering on time`, body: t.title, url: taskUrl(t.id), tag: `task-${t.id}-green`,
+      });
+    } catch (err) {
+      if (err.code !== '23505') throw err; // already awarded for this task (it was reopened and finished again)
+    }
+  }
 
   // ----- Files -----
 
@@ -477,7 +496,18 @@ function registerTasks(app, ctx) {
     const body = str(req.body.body, 2000) || fail('Write a comment');
     const row = await db.get(`INSERT INTO task_comments (task_id, user_id, body) VALUES (?, ?, ?) RETURNING *`, [t.id, u.id, body]);
     await db.run('UPDATE tasks SET updated_at = now() WHERE id = ?', [t.id]);
-    await notify([t.assignee_id, t.created_by, ...(await deptManagers(t.department))], u, {
+    // @username mentions: those people can now see the task and get a direct notification.
+    const handles = [...new Set([...body.matchAll(/(^|[^\w@])@([\w.-]{2,40})/g)].map((m) => m[2].toLowerCase().replace(/\.$/, '')))];
+    const mentioned = handles.length
+      ? await db.all('SELECT id FROM users WHERE active = 1 AND lower(username) = ANY(?::text[]) AND id <> ?', [handles, u.id])
+      : [];
+    for (const m of mentioned) await db.run('INSERT INTO task_watchers (task_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [t.id, m.id]);
+    await notify(mentioned.map((m) => m.id), u, {
+      title: `📣 ${u.name} mentioned you`, body: `${t.title}: ${body.slice(0, 120)}`, url: taskUrl(t.id), tag: `task-${t.id}-m`,
+    });
+    const watchers = (await db.all('SELECT user_id FROM task_watchers WHERE task_id = ?', [t.id])).map((w) => w.user_id);
+    const mentionedIds = new Set(mentioned.map((m) => m.id));
+    await notify([t.assignee_id, t.created_by, ...(await deptManagers(t.department)), ...watchers].filter((id) => !mentionedIds.has(id)), u, {
       title: `💬 ${u.name} on "${t.title}"`, body: body.slice(0, 140), url: taskUrl(t.id), tag: `task-${t.id}-c`,
     });
     res.status(201).json({ ...row, user_name: u.name });

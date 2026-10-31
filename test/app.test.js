@@ -637,6 +637,80 @@ test('clients: a managed list that tasks pick from', async () => {
   assert.equal((await am(`/tasks/${t.body.id}`)).body.client, 'Nike');
 });
 
+test('mentions, on-time points, department & client reports, Drive backup', async () => {
+  const amira = (await owner('/admin/users')).body.find((u) => u.username === 'amira');
+  await owner(`/admin/users/${amira.id}`, { method: 'PATCH', body: { reset_device: true } }); // her phone and laptop are taken by earlier tests
+  const am = client(UA.phone);
+  await am('/login', { method: 'POST', body: { username: 'amira', password: 'pass123' } });
+  const realMonth = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit' }).format(new Date()).slice(0, 7);
+  const kiko = (await am('/clients')).body.rows.find((c) => c.name === 'Kiko');
+  const t = (await owner('/tasks', { method: 'POST', body: { title: 'Story set', client_id: kiko.id, department: 'Design', assignee_id: dinaId, due_date: '2026-03-20' } })).body;
+
+  // @mention: Omar (not on the task, other department) can now see it and finds it under "My tasks".
+  assert.equal((await emp(`/tasks/${t.id}`)).status, 404);
+  await dina(`/tasks/${t.id}/comments`, { method: 'POST', body: { body: 'Can you check the copy @omar?' } });
+  assert.equal((await emp(`/tasks/${t.id}`)).status, 200);
+  assert.ok((await emp('/tasks?scope=mine')).body.some((x) => x.id === t.id));
+  assert.equal((await emp(`/tasks/${t.id}`, { method: 'PATCH', body: { status: 'review' } })).status, 403); // watching ≠ working on it
+
+  // Delivered before the due date (clock is 2026-03-07) → one green point, even if reopened and finished again.
+  const greenBefore = (await dina('/me/dashboard')).body.balances.green;
+  await dina(`/tasks/${t.id}`, { method: 'PATCH', body: { status: 'in_progress' } });
+  await dina(`/tasks/${t.id}`, { method: 'PATCH', body: { status: 'review' } });
+  await owner(`/tasks/${t.id}`, { method: 'PATCH', body: { status: 'done' } });
+  await owner(`/tasks/${t.id}`, { method: 'PATCH', body: { status: 'in_progress' } });
+  await owner(`/tasks/${t.id}`, { method: 'PATCH', body: { status: 'done' } });
+  assert.equal((await dina('/me/dashboard')).body.balances.green, greenBefore + 1);
+  const rep = (await owner(`/admin/report?month=${realMonth}`)).body.rows.find((r) => r.user_id === dinaId);
+  // completed_at is the database's real time while the app clock is March 2026, so here these count as late.
+  assert.ok(rep.tasks_done >= 2);
+  assert.equal(rep.tasks_done, rep.tasks_on_time + rep.tasks_late);
+
+  // Department report: the lead sees their own department, ranked; employees can't.
+  assert.equal((await dina('/reports/department')).status, 403);
+  const dr = (await lead(`/reports/department?month=${realMonth}&department=Content`)).body; // a lead can't pick another department
+  assert.equal(dr.department, 'Design');
+  assert.deepEqual(dr.members.map((m) => m.name).sort(), ['Dina', 'Lina Lead']);
+  assert.equal(dr.members[0].name, 'Dina'); // most tasks delivered
+  assert.equal(dr.top[0].user_id, dinaId);
+  assert.ok(dr.summary.tasks_done >= 2);
+  assert.ok(dr.clients.some((c) => c.client === 'Kiko'));
+  assert.equal((await lead('/reports/department/submit', { method: 'POST', body: { month: realMonth, notes: 'Great month, Dina carried the Kiko launch.' } })).status, 200);
+  const sub = (await owner(`/reports/department/submitted?month=${realMonth}`)).body;
+  assert.equal(sub.rows[0].department, 'Design');
+  assert.equal((await owner(`/reports/department?month=${realMonth}&department=Design`)).body.submitted.notes, 'Great month, Dina carried the Kiko launch.');
+
+  // Client report for account managers and owners.
+  assert.equal((await dina(`/reports/client?id=${kiko.id}`)).status, 403);
+  const cr = (await am(`/reports/client?id=${kiko.id}&month=${realMonth}`)).body;
+  assert.equal(cr.client.name, 'Kiko');
+  assert.ok(cr.summary.done >= 1);
+  assert.ok(cr.files.some((f) => f.kind === 'link'));
+
+  // Daily backup to Drive: lands in Bahr Network Files / Backups, one file per day.
+  const { startFakeGoogle } = require('./fake-google');
+  const g = await startFakeGoogle();
+  try {
+    const cookie = [...owner.jar].map(([k, v]) => `${k}=${v}`).join('; ');
+    const hop = async (u) => fetch(u, { redirect: 'manual', headers: u.startsWith(base) ? { Cookie: cookie, 'User-Agent': UA.phone } : {} });
+    let r = await hop(`${base}/api/admin/drive/connect`);
+    r = await hop(r.headers.get('location'));
+    await hop(r.headers.get('location'));
+    const daily = (await emp('/cron/daily')).body;
+    assert.ok(daily.backup && daily.backup.name.startsWith('bahr-backup-'));
+    await emp('/cron/daily'); // same day again replaces, doesn't duplicate
+    const files = [...g.state.files.values()];
+    const backups = files.filter((f) => f.name.startsWith('bahr-backup-') && !f.trashed);
+    assert.equal(backups.length, 1);
+    assert.equal(files.find((f) => f.id === backups[0].parents[0]).name, 'Backups');
+    assert.equal(backups[0].data.subarray(0, 2).toString(), 'PK');
+    assert.equal((await owner('/admin/drive')).body.last_backup.name, backups[0].name);
+    await owner('/admin/drive/disconnect', { method: 'POST', body: {} });
+  } finally {
+    g.close();
+  }
+});
+
 test('rejects non-JSON writes', async () => {
   const res = await fetch(`${base}/api/login`, { method: 'POST', body: 'username=a&password=b', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
   assert.equal(res.status, 415);

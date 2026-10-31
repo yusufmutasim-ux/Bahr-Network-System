@@ -275,6 +275,24 @@ CREATE TABLE IF NOT EXISTS clients (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS clients_name ON clients (lower(name));
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL;
+-- People @mentioned on a task can see it and follow its updates.
+CREATE TABLE IF NOT EXISTS task_watchers (
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (task_id, user_id)
+);
+-- One on-time delivery point per task.
+CREATE UNIQUE INDEX IF NOT EXISTS points_one_task ON points (ref_id) WHERE source = 'task';
+-- Monthly department summaries a lead sends to the owners.
+CREATE TABLE IF NOT EXISTS dept_reports (
+  id SERIAL PRIMARY KEY,
+  department TEXT NOT NULL,
+  month TEXT NOT NULL,
+  notes TEXT,
+  submitted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (department, month)
+);
 -- Clients typed into tasks before the list existed become real clients (idempotent).
 INSERT INTO clients (name)
   SELECT DISTINCT ON (lower(trim(client))) trim(client) FROM tasks
@@ -332,6 +350,9 @@ const DEFAULT_SETTINGS = {
   am_department: 'Account Management',
   // Largest single upload to Google Drive, in MB.
   max_upload_mb: 20480,
+  drive_backup: true,
+  // Green points for delivering a task by its due date (0 = off).
+  task_green: 1,
   weekly_summary: true,
 };
 

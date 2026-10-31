@@ -71,7 +71,7 @@ function registerCulture(app, ctx) {
   app.get('/api/people', requireUser, async (req, res) => {
     const month = localToday(await settings()).date.slice(0, 7);
     const rows = await db.all(
-      `SELECT u.id, u.name, u.role, u.job_title, u.department, u.start_date, u.birthday,
+      `SELECT u.id, u.name, u.username, u.role, u.job_title, u.department, u.start_date, u.birthday,
               (SELECT COUNT(*) FROM kudos k WHERE k.to_user = u.id AND to_char(k.created_at AT TIME ZONE ?, 'YYYY-MM') = ?) AS kudos_month
        FROM users u WHERE u.active = 1 ORDER BY u.name`,
       [(await settings()).timezone, month],
