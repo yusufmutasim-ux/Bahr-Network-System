@@ -22,6 +22,7 @@ const {
 } = require('./logic');
 const auth = require('./auth');
 const { registerCulture } = require('./culture');
+const { registerTasks, remindDueTasks } = require('./tasks');
 const { resolveMapLink } = require('./maplink');
 const push = require('./push');
 
@@ -299,7 +300,8 @@ function createApp(db, { now = () => new Date() } = {}) {
         url: '/#/', tag: `remind-${t.date}`,
       });
     }
-    res.json({ added, reminded });
+    const tasks = await remindDueTasks(db, t.date);
+    res.json({ added, reminded, tasks });
   });
 
   // Weekly (Vercel Cron, Thursday afternoon): a summary of the week for the owners.
@@ -1218,6 +1220,11 @@ function createApp(db, { now = () => new Date() } = {}) {
       ['Rewards', `SELECT r.id, r.user_id, u.name, r.points, r.amount, r.method, r.payout_number, r.status, d.name AS decided_by, r.decided_at, r.created_at
                    FROM reward_requests r JOIN users u ON u.id = r.user_id LEFT JOIN users d ON d.id = r.decided_by ORDER BY r.id`],
       ['Holidays', 'SELECT id, date, name FROM holidays ORDER BY date'],
+      ['Tasks', `SELECT t.id, t.title, t.client, t.department, a.name AS assignee, c.name AS created_by, t.status, t.priority,
+                        t.start_date, t.due_date, t.completed_at, t.created_at, t.description,
+                        (SELECT COUNT(*) FROM task_items i WHERE i.task_id = t.id AND i.done = 1) || '/' ||
+                        (SELECT COUNT(*) FROM task_items i WHERE i.task_id = t.id) AS checklist
+                 FROM tasks t LEFT JOIN users a ON a.id = t.assignee_id LEFT JOIN users c ON c.id = t.created_by ORDER BY t.id`],
       ['Kudos', `SELECT k.id, f.name AS "from", t.name AS "to", k.category, k.message, k.created_at
                  FROM kudos k JOIN users f ON f.id = k.from_user JOIN users t ON t.id = k.to_user ORDER BY k.id`],
       ['Announcements', `SELECT a.id, a.title, a.body, a.kind, a.pinned, u.name AS author, a.created_at
@@ -1380,6 +1387,7 @@ function createApp(db, { now = () => new Date() } = {}) {
   registerCulture(app, {
     db, settings, localToday, now, fail, str, posInt, idParam, requireUser, requireOwner, attendanceStats, addPoints,
   });
+  registerTasks(app, { db, settings, localToday, fail, str, posInt, idParam, requireUser, audit });
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
@@ -1398,7 +1406,7 @@ function pickRules(s) {
   const keys = [
     'company_name', 'currency', 'early_start', 'early_end', 'late_after', 'very_late_after', 'close',
     'very_late_reds', 'work_days', 'red_value', 'black_value', 'green_value', 'min_reward_points', 'radius_m',
-    'departments', 'kudos_daily_limit', 'kudos_green', 'daily_hours', 'annual_leave_days', 'sick_leave_days',
+    'departments', 'kudos_daily_limit', 'kudos_green', 'daily_hours', 'annual_leave_days', 'sick_leave_days', 'am_department',
   ];
   return { ...Object.fromEntries(keys.map((k) => [k, s[k]])), location_set: s.office_lat != null };
 }
@@ -1455,6 +1463,7 @@ function validateSettings(s) {
   out.payroll_add_rewards = !!s.payroll_add_rewards;
   out.weekly_summary = s.weekly_summary !== false;
   out.dept_schedules = validateSchedules(s.dept_schedules, out.departments);
+  out.am_department = out.departments.includes(s.am_department) ? s.am_department : '';
   delete out.holiday_dates;
   return out;
 }

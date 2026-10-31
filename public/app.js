@@ -65,6 +65,8 @@ const ICONS = {
   receipt: '<path d="M4 2v20l3-2 3 2 2-2 2 2 3-2 3 2V2l-3 2-3-2-2 2-2-2-3 2z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
   party: '<path d="M5.8 11.3 2 22l10.7-3.8"/><path d="M4 3h.01M22 8h.01M15 2h.01M22 20h.01"/><path d="m22 2-2.24.75a2.9 2.9 0 0 0-1.96 3.12c.1.86-.57 1.63-1.45 1.63h-.38c-.86 0-1.6.6-1.76 1.44L14 10"/><path d="M11 13c1.93 1.93 2.83 4.17 2 5-.83.83-3.07-.07-5-2-1.93-1.93-2.83-4.17-2-5 .83-.83 3.07.07 5 2Z"/>',
   list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/>',
+  kanban: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 7v7M12 7v4M16 7v9"/>',
   team: '<circle cx="12" cy="8" r="3"/><circle cx="5" cy="10" r="2"/><circle cx="19" cy="10" r="2"/><path d="M7 21v-2a5 5 0 0 1 10 0v2M1 21v-1a3 3 0 0 1 4-2.8M23 21v-1a3 3 0 0 0-4-2.8"/>',
 };
 const icon = (name, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -270,6 +272,7 @@ async function act(btn, fn, okMsg) {
 
 function modal({ title, sub = '', body, submit = 'Save', danger = false, onSubmit }) {
   const dlg = $('#modal');
+  dlg.className = 'modal';
   dlg.innerHTML = `<form class="card" method="dialog">
       <div class="row between"><h2>${esc(title)}</h2><button class="icon-btn ghost" type="button" data-close aria-label="Close">${icon('x')}</button></div>
       ${sub ? `<p class="muted small" style="margin-bottom:14px">${sub}</p>` : '<div style="height:10px"></div>'}
@@ -285,7 +288,7 @@ function modal({ title, sub = '', body, submit = 'Save', danger = false, onSubmi
     const ok = await act(e.submitter, () => onSubmit(formData(form), form));
     if (ok) dlg.close();
   };
-  dlg.showModal();
+  if (!dlg.open) dlg.showModal();
   $('input:not([type=hidden]), select, textarea', form)?.focus();
 }
 
@@ -914,6 +917,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintTheme
 const EMPLOYEE_NAV = [
   { group: 'Overview' },
   { key: '', label: 'My Activity', icon: 'activity', view: () => viewEmployeeHome() },
+  { key: 'tasks', label: 'Tasks', icon: 'kanban', view: (p) => viewTasks(p), count: () => taskBadge() },
   { key: 'profile', label: 'My Profile', icon: 'user', view: () => viewPerson(new URLSearchParams(`id=${me.id}`)) },
   { key: 'history', label: 'My History', icon: 'calendar', view: (p) => viewHistory(p) },
   { group: 'Team' },
@@ -932,6 +936,7 @@ const EMPLOYEE_NAV = [
 const OWNER_NAV = [
   { group: 'Overview' },
   { key: '', label: 'Dashboard', icon: 'home', view: (p) => viewOwnerDashboard(p) },
+  { key: 'tasks', label: 'Tasks', icon: 'kanban', view: (p) => viewTasks(p), count: () => taskBadge() },
   { key: 'reports', label: 'Monthly Report', icon: 'chart', view: (p) => viewReport(p) },
   { key: 'payroll', label: 'Payroll', icon: 'receipt', view: (p) => viewPayroll(p) },
   { group: 'People' },
@@ -967,12 +972,14 @@ const LEAD_NAV = (() => {
   ];
 })();
 // Phones/tablets: four main tabs + "More" (everything else lives in a bottom sheet).
-const BOTTOM_LABEL = { '': 'Home', history: 'History', leaves: 'Leave', rewards: 'Rewards', leaderboard: 'Ranking', employees: 'Staff', reports: 'Report', wall: 'Wall', profile: 'Me', team: 'Team' };
+const BOTTOM_LABEL = { '': 'Home', history: 'History', leaves: 'Leave', rewards: 'Rewards', leaderboard: 'Ranking', employees: 'Staff', reports: 'Report', wall: 'Wall', profile: 'Me', team: 'Team', tasks: 'Tasks' };
 const BOTTOM = {
-  employee: ['', 'wall', 'leaves', 'rewards'],
-  lead: ['', 'team', 'leaves', 'wall'],
-  owner: ['', 'employees', 'leaves', 'wall'],
+  employee: ['', 'tasks', 'leaves', 'wall'],
+  lead: ['', 'tasks', 'team', 'leaves'],
+  owner: ['', 'tasks', 'employees', 'leaves'],
 };
+// Tasks needing attention: open tasks assigned to me, new ones to assign (leads) and work waiting for my review.
+const taskBadge = () => (taskMeta ? taskMeta.counts.mine + (me.role === 'lead' ? taskMeta.counts.inbox : 0) + taskMeta.counts.to_review : 0);
 
 const navItems = () => (me.role === 'owner' ? OWNER_NAV : me.role === 'lead' ? LEAD_NAV : EMPLOYEE_NAV);
 const roleLine = (u) => (u.role === 'owner' ? 'Owner' : u.role === 'lead' ? `Team lead${u.department ? ` · ${esc(u.department)}` : ''}` : esc(u.job_title || 'Staff'));
@@ -1064,7 +1071,7 @@ function openMore() {
     dlg.close();
     ({ search: openPalette, theme: () => setTheme(isDark() ? 'light' : 'dark', $('[data-more]')), install: installApp, logout })[b.dataset.moreAct]();
   }));
-  dlg.onclick = (e) => e.target === dlg && dlg.close();
+  dlg.onclick = (e) => { if (e.target === dlg) dlg.close(); };
   dlg.showModal();
   haptic(10);
 }
@@ -1190,6 +1197,7 @@ async function start() {
 
 // Pending counts (owner) and recent decisions (employee) for badges + notifications.
 async function refreshCounts() {
+  taskMeta = await api('/tasks/meta').catch(() => taskMeta);
   try {
     if (me.role === 'owner') {
       const [o, leaves, rewards, feed, fixes] = await Promise.all([
@@ -1330,7 +1338,7 @@ async function openPalette() {
     const r = e.target.closest('.res');
     if (r) { sel = Number(r.dataset.i); runSel(); }
   };
-  dlg.onclick = (e) => e.target === dlg && dlg.close();
+  dlg.onclick = (e) => { if (e.target === dlg) dlg.close(); };
   draw();
   dlg.showModal();
   q.focus();
@@ -1513,7 +1521,7 @@ function monthInput(month, hashBase) {
 // ---------- Employee: home ----------
 
 async function viewEmployeeHome() {
-  const [d, h, leaves, lb, ach, ann, people] = await Promise.all([
+  const [d, h, leaves, lb, ach, ann, people, myTasks] = await Promise.all([
     api('/me/dashboard'),
     api(`/me/history?month=${thisMonth()}`),
     api('/me/leaves'),
@@ -1521,6 +1529,7 @@ async function viewEmployeeHome() {
     api('/me/achievements'),
     api('/announcements').catch(() => []),
     api('/people').catch(() => []),
+    api('/tasks?scope=mine').catch(() => []),
   ]);
   const celebrations = upcomingCelebrations(people, d.now.date);
   const dismissed = JSON.parse(store.get('dismissed', '[]'));
@@ -1600,6 +1609,7 @@ async function viewEmployeeHome() {
           ${d.work_day ? timeTrack(r, d.now.time) : ''}
           <div class="mt">${checkBlock}</div>
         </div>
+        ${myTasksCard(myTasks)}
 
         <div class="card">
           <div class="card-head"><h2>My points</h2><span class="chip">${fmtMonth(d.now.date.slice(0, 7))}</span></div>
@@ -2836,6 +2846,8 @@ async function viewSettings() {
       ${sec('team', '🤝', 'Team & culture', `${s.departments.length} departments · ${s.kudos_daily_limit} kudos/day`,
         `<div class="f"><span>Departments</span><div class="chips" id="depts">${s.departments.map((d) => `<span class="chip dept-chip" data-dept="${esc(d)}">${esc(d)} <button type="button" class="icon-btn xs ghost" style="width:20px;height:20px" aria-label="Remove">${icon('x')}</button></span>`).join('')}</div>
           <div class="row mt"><input id="new-dept" placeholder="Add a department, e.g. SEO"><button class="btn sm light" type="button" id="add-dept">${icon('plus')}Add</button></div></div>
+        <label class="f mt">Account managers department <span class="muted tiny">Its members can send tasks to every department</span>
+          <select name="am_department"><option value="">Nobody (only owners and leads create tasks)</option>${s.departments.map((d) => `<option ${d === s.am_department ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
         <div class="form-grid two mt">
           <label class="f">Kudos per person per day<input type="number" name="kudos_daily_limit" value="${s.kudos_daily_limit}" min="0" max="50" required></label>
           <label class="f">Green points per kudos <span class="muted tiny">(0 = none)</span><input type="number" name="kudos_green" value="${s.kudos_green}" min="0" max="10" required></label>
@@ -3395,6 +3407,378 @@ async function viewMember(params) {
         ${calendar(month, { attendance: h.attendance, points: h.points, leaves, workDays: d.rules.work_days, startDate: p.start_date, today: d.now.date })}</div>
     </div>
     ${historyLists(h)}`;
+}
+
+// ---------- Tasks ----------
+
+const TASK_STATUS = { todo: ['To do', 'slate'], in_progress: ['In progress', 'sky'], review: ['In review', 'amber'], done: ['Done', 'lime'] };
+const PRIORITY = { low: ['Low', ''], medium: ['Medium', 'teal'], high: ['High', 'amber'], urgent: ['Urgent', 'pink'] };
+const TASK_VIEWS = { board: ['Board', 'kanban'], list: ['List', 'list'], timeline: ['Timeline', 'calendar'] };
+let taskMeta = null;
+let taskReload = null; // re-renders the open Tasks page after a change in the detail sheet
+
+const dueChip = (t) => {
+  if (!t.due_date) return '';
+  const today = localISODate();
+  const late = t.status !== 'done' && t.due_date < today;
+  const soon = t.status !== 'done' && t.due_date === today;
+  return `<span class="chip ${late ? 'pink' : soon ? 'amber' : ''} task-due" title="Due ${fmtLong(t.due_date)}">${icon('calendar')}${late ? 'Late · ' : soon ? 'Today · ' : ''}${fmtDate(t.due_date, { day: 'numeric', month: 'short' })}</span>`;
+};
+const progressHtml = (t) => (t.items_total
+  ? `<div class="task-progress" title="${t.items_done} of ${t.items_total} done"><i style="width:${pct(t.items_done, t.items_total)}%"></i></div><span class="tiny muted num">${t.items_done}/${t.items_total}</span>`
+  : '');
+const assigneeHtml = (t, size = 'sm') => (t.assignee_name
+  ? `<span class="row task-who" style="gap:6px">${avatar(t.assignee_name, size)}<span class="small">${esc(t.assignee_name.split(' ')[0])}</span></span>`
+  : `<span class="chip amber task-who">${icon('user')}Unassigned</span>`);
+
+function taskCard(t) {
+  return `<article class="task-card prio-${t.priority}" data-task="${t.id}" draggable="true" tabindex="0">
+    <div class="task-tags">${t.client ? `<span class="chip">${esc(t.client)}</span>` : ''}
+      ${t.priority === 'urgent' || t.priority === 'high' ? `<span class="chip ${PRIORITY[t.priority][1]}">${icon('flag')}${PRIORITY[t.priority][0]}</span>` : ''}
+      ${me.role === 'owner' || taskMeta?.is_am ? `<span class="chip dept-chip">${esc(t.department)}</span>` : ''}</div>
+    <h4>${esc(t.title)}</h4>
+    ${t.description ? `<p class="task-desc">${esc(t.description)}</p>` : ''}
+    ${t.items_total ? `<div class="row" style="gap:8px;margin-top:10px">${progressHtml(t)}</div>` : ''}
+    <div class="task-foot">${assigneeHtml(t)}<span class="row" style="gap:6px">${t.comments ? `<span class="tiny muted row" style="gap:3px">💬 ${t.comments}</span>` : ''}${dueChip(t)}</span></div>
+  </article>`;
+}
+
+function boardHtml(list) {
+  return `<div class="task-board">${Object.entries(TASK_STATUS).map(([k, [label, c]]) => {
+    const col = list.filter((t) => t.status === k);
+    return `<section class="task-col" data-status="${k}">
+      <header><span class="dot ${c}"></span><strong>${label}</strong><span class="muted small">${col.length}</span></header>
+      <div class="task-col-body">${col.map(taskCard).join('') || `<div class="task-empty">${k === 'review' ? 'Nothing waiting for review' : k === 'done' ? 'Finished tasks land here' : 'No tasks'}</div>`}</div>
+    </section>`;
+  }).join('')}</div>`;
+}
+
+function listHtml(list) {
+  return `<div class="card task-list">${Object.entries(TASK_STATUS).map(([k, [label, c]]) => {
+    const rows = list.filter((t) => t.status === k);
+    if (!rows.length) return '';
+    return `<div class="task-group"><span class="dot ${c}"></span>${label} <span class="muted">${rows.length}</span></div>
+      ${rows.map((t) => `<button type="button" class="task-row" data-task="${t.id}">
+        <span class="task-row-main"><strong>${esc(t.title)}</strong><span class="tiny muted">${[t.client, t.department].filter(Boolean).map(esc).join(' · ')}</span></span>
+        <span class="task-row-prio"><span class="chip ${PRIORITY[t.priority][1]}"><span class="dot"></span>${PRIORITY[t.priority][0]}</span></span>
+        <span class="task-row-prog">${t.items_total ? `<span class="ring" style="--p:${pct(t.items_done, t.items_total)}"></span><span class="small num">${pct(t.items_done, t.items_total)}% <span class="muted">${t.items_done}/${t.items_total}</span></span>` : '<span class="muted small">—</span>'}</span>
+        <span class="task-row-who">${assigneeHtml(t)}</span>
+        <span class="task-row-due">${dueChip(t) || '<span class="muted small">No date</span>'}</span>
+      </button>`).join('')}`;
+  }).join('') || empty('kanban', 'No tasks here')}</div>`;
+}
+
+// Gantt-style view: bars from start (or creation) to due date, with a "today" line.
+function timelineHtml(list) {
+  const today = localISODate();
+  const monday = (() => { const x = toDate(today); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7) - 7); return x.toISOString().slice(0, 10); })();
+  const days = 56;
+  const dayW = 26;
+  const idx = (d) => daysBetween(monday, d);
+  const weeks = Array.from({ length: days / 7 }, (_, i) => { const x = toDate(monday); x.setUTCDate(x.getUTCDate() + i * 7); return x.toISOString().slice(0, 10); });
+  const rows = Object.keys(TASK_STATUS).flatMap((k) => {
+    const group = list.filter((t) => t.status === k);
+    if (!group.length) return [];
+    return [`<div class="tl-row tl-group"><div class="tl-name"><span class="dot ${TASK_STATUS[k][1]}"></span>${TASK_STATUS[k][0]} <span class="muted">${group.length}</span></div><div class="tl-track"></div></div>`,
+      ...group.map((t) => {
+        const from = t.start_date || String(t.created_at).slice(0, 10);
+        const to = t.due_date && t.due_date >= from ? t.due_date : from;
+        const a = Math.max(0, idx(from));
+        const b = Math.min(days - 1, idx(to));
+        const bar = b >= 0 && a <= days - 1
+          ? `<span class="tl-bar ${TASK_STATUS[t.status][1]} prio-${t.priority}" style="left:${a * dayW}px;width:${Math.max(1, b - a + 1) * dayW - 4}px">${t.items_total ? `${pct(t.items_done, t.items_total)}% · ${t.items_done}/${t.items_total}` : esc(t.assignee_name?.split(' ')[0] || 'Unassigned')}</span>`
+          : `<span class="tl-off muted tiny" style="${idx(to) < 0 ? 'left:4px' : 'right:4px'}">${idx(to) < 0 ? '← ' : ''}${fmtDate(to, { day: 'numeric', month: 'short' })}${idx(to) < 0 ? '' : ' →'}</span>`;
+        return `<div class="tl-row" data-task="${t.id}"><div class="tl-name"><strong>${esc(t.title)}</strong><span class="tiny muted">${esc(t.client || t.department)}</span></div><div class="tl-track">${bar}</div></div>`;
+      })];
+  });
+  return `<div class="card tl-card"><div class="tl-scroll"><div class="tl" style="--days:${days};--day:${dayW}px">
+    <div class="tl-row tl-head"><div class="tl-name muted tiny">TASK</div><div class="tl-track">${weeks.map((w, i) => `<span style="left:${i * 7 * dayW}px">${fmtDate(w, { day: 'numeric', month: 'short' }).toUpperCase()}</span>`).join('')}</div></div>
+    ${rows.join('') || `<div style="padding:30px">${empty('calendar', 'No tasks here')}</div>`}
+    <i class="tl-today" style="left:calc(var(--name) + ${idx(today) * dayW + dayW / 2}px)" title="Today"></i>
+  </div></div></div>`;
+}
+
+async function viewTasks(params) {
+  taskMeta = await api('/tasks/meta');
+  const role = me.role;
+  const scopes = role === 'owner'
+    ? [['all', 'All tasks'], ['created', 'Created by me']]
+    : role === 'lead'
+      ? [['team', `Team · ${me.department || ''}`], ['inbox', 'To assign', taskMeta.counts.inbox], ['mine', 'My tasks']]
+      : taskMeta.is_am
+        ? [['created', 'My requests', taskMeta.counts.to_review], ['mine', 'My tasks']]
+        : [['mine', 'My tasks']];
+  const scope = scopes.some((x) => x[0] === params.get('scope')) ? params.get('scope') : scopes[0][0];
+  let view = params.get('view') || store.get('taskView', 'board');
+  if (!TASK_VIEWS[view]) view = 'board';
+  let q = '';
+  let client = '';
+  let dept = '';
+  let list = await api(`/tasks?scope=${scope}`);
+  const today = localISODate();
+  const openCount = list.filter((t) => t.status !== 'done').length;
+  const late = list.filter((t) => t.status !== 'done' && t.due_date && t.due_date < today).length;
+  const subtitle = role === 'lead' && taskMeta.counts.inbox
+    ? `<b style="color:var(--amber-ink, inherit)">${taskMeta.counts.inbox} new task${taskMeta.counts.inbox === 1 ? '' : 's'} waiting for you to assign</b>`
+    : `${openCount} open${late ? ` · <b style="color:var(--red)">${late} late</b>` : ''}${taskMeta.is_am ? ' · send work to any department' : ''}`;
+
+  $('#app').innerHTML = `
+    ${pageHead('Tasks', subtitle, taskMeta.can_create ? `<button class="btn" id="new-task">${icon('plus')}New task</button>` : '')}
+    ${scopes.length > 1 ? `<div class="seg task-scopes" style="margin-bottom:12px">${scopes.map(([k, label, n]) => `<a href="#/tasks?scope=${k}" class="${k === scope ? 'on' : ''}">${esc(label)}${n ? ` <i class="nav-badge static">${n}</i>` : ''}</a>`).join('')}</div>` : ''}
+    <div class="task-toolbar">
+      <div class="seg" id="tview">${Object.entries(TASK_VIEWS).map(([k, [label, ic]]) => `<button type="button" data-v="${k}" class="${k === view ? 'on' : ''}">${icon(ic)}${label}</button>`).join('')}</div>
+      <div class="input-icon task-search">${icon('search')}<input id="tq" placeholder="Search tasks"></div>
+      ${taskMeta.clients.length ? `<select id="tclient" class="task-filter"><option value="">All clients</option>${taskMeta.clients.map((c) => `<option>${esc(c)}</option>`).join('')}</select>` : ''}
+      ${role === 'owner' || taskMeta.is_am ? `<select id="tdept" class="task-filter"><option value="">All departments</option>${(rules().departments || []).map((d) => `<option>${esc(d)}</option>`).join('')}</select>` : ''}
+    </div>
+    <div id="tasks"></div>`;
+
+  const draw = () => {
+    const rows = list
+      .filter((t) => !client || t.client === client)
+      .filter((t) => !dept || t.department === dept)
+      .filter((t) => !q || `${t.title} ${t.client || ''} ${t.description || ''} ${t.assignee_name || ''}`.toLowerCase().includes(q));
+    $('#tasks').innerHTML = !list.length
+      ? `<div class="card">${empty('kanban', scope === 'inbox' ? 'Nothing to assign. All caught up!' : scope === 'mine' ? 'No tasks for you yet. Enjoy the calm ☕' : 'No tasks yet',
+          taskMeta.can_create && scope !== 'inbox' ? `<button class="btn sm" id="new-task-2">${icon('plus')}Create the first task</button>` : '')}</div>`
+      : view === 'list' ? listHtml(rows) : view === 'timeline' ? timelineHtml(rows) : boardHtml(rows);
+    $$('#tasks [data-task]').forEach((el) => el.addEventListener('click', () => openTask(Number(el.dataset.task))));
+    $('#new-task-2')?.addEventListener('click', () => taskForm());
+    if (view === 'board') {
+      bindDrag();
+      // Phones show one column at a time: start at the first one with work in it.
+      const first = $$('.task-col').find((c) => c.querySelector('.task-card'));
+      if (first && matchMedia('(max-width: 640px)').matches) $('.task-board').scrollLeft = first.offsetLeft - 16;
+    }
+    if (view === 'timeline') {
+      const sc = $('.tl-scroll');
+      const line = $('.tl-today');
+      if (sc && line) sc.scrollLeft = Math.max(0, line.offsetLeft - sc.clientWidth / 2);
+    }
+  };
+  // Desktop: drag a card to another column to change its status.
+  const bindDrag = () => {
+    let dragId = null;
+    $$('.task-card').forEach((c) => {
+      c.addEventListener('dragstart', (e) => { dragId = Number(c.dataset.task); c.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+      c.addEventListener('dragend', () => { c.classList.remove('dragging'); $$('.task-col').forEach((x) => x.classList.remove('drop')); });
+      c.addEventListener('keydown', (e) => { if (e.key === 'Enter') openTask(Number(c.dataset.task)); });
+    });
+    $$('.task-col').forEach((col) => {
+      col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('drop'); });
+      col.addEventListener('dragleave', (e) => { if (!col.contains(e.relatedTarget)) col.classList.remove('drop'); });
+      col.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        col.classList.remove('drop');
+        const t = list.find((x) => x.id === dragId);
+        if (!t || t.status === col.dataset.status) return;
+        const prev = t.status;
+        t.status = col.dataset.status;
+        draw();
+        try {
+          await api(`/tasks/${t.id}`, { method: 'PATCH', body: { status: t.status } });
+          if (t.status === 'done') { confetti({ count: 70 }); chime(); }
+          toast(`Moved to ${TASK_STATUS[t.status][0]}`, 'success');
+        } catch (err) {
+          t.status = prev;
+          draw();
+          toast(err.message, 'error');
+        }
+      });
+    });
+  };
+  $$('#tview button').forEach((b) => (b.onclick = () => {
+    view = b.dataset.v;
+    store.set('taskView', view);
+    $$('#tview button').forEach((x) => x.classList.toggle('on', x === b));
+    draw();
+    animateIn($('#tasks'));
+  }));
+  $('#tq').oninput = (e) => { q = e.target.value.trim().toLowerCase(); draw(); };
+  if ($('#tclient')) $('#tclient').onchange = (e) => { client = e.target.value; draw(); };
+  if ($('#tdept')) $('#tdept').onchange = (e) => { dept = e.target.value; draw(); };
+  $('#new-task')?.addEventListener('click', () => taskForm());
+  taskReload = async () => {
+    if (parseHash().path !== 'tasks') return;
+    list = await api(`/tasks?scope=${scope}`);
+    draw();
+  };
+  draw();
+  if (params.get('task')) openTask(Number(params.get('task')));
+}
+
+// Create or edit a task.
+function taskForm(t = null) {
+  const m = taskMeta;
+  const depts = m.departments;
+  const canPick = (d) => me.role === 'owner' || (me.role === 'lead' && me.department === d);
+  const startDept = t?.department || (me.role === 'lead' ? me.department : '') || '';
+  modal({
+    title: t ? 'Edit task' : 'New task',
+    sub: t ? '' : me.role === 'owner' ? 'Send it to a department, or assign someone directly.' : me.role === 'lead' ? 'For your own team you can assign someone directly; other departments get it in their lead\'s inbox.' : 'It goes to the department lead, who assigns it to someone on the team.',
+    body: `<div class="grid" style="gap:14px">
+      <label class="f">What needs doing?<input name="title" maxlength="140" required value="${esc(t?.title || '')}" placeholder="e.g. 3 reels for the Ramadan campaign"></label>
+      <div class="form-grid two">
+        <label class="f">Client<input name="client" maxlength="80" list="client-list" value="${esc(t?.client || '')}" placeholder="e.g. Nike Egypt" autocomplete="off">
+          <datalist id="client-list">${m.clients.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></label>
+        <label class="f">Department<select name="department" required ${t && !t.can.change_department ? 'disabled' : ''}><option value="">Choose…</option>${depts.map((d) => `<option ${d === startDept ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></label>
+      </div>
+      <div class="f"><span>Priority</span><div class="choice">${Object.entries(PRIORITY).map(([k, [label]]) => `<label><input type="radio" name="priority" value="${k}" ${(t?.priority || 'medium') === k ? 'checked' : ''}>${k === 'urgent' ? '🔥 ' : ''}${label}</label>`).join('')}</div></div>
+      <div class="form-grid two">
+        <label class="f">Start<input type="date" name="start_date" value="${esc(t?.start_date || '')}"></label>
+        <label class="f">Due<input type="date" name="due_date" value="${esc(t?.due_date || '')}"></label>
+      </div>
+      <label class="f">Brief<textarea name="description" maxlength="4000" rows="3" placeholder="Goal, references, links, deliverables…">${esc(t?.description || '')}</textarea></label>
+      ${t ? '' : `<label class="f">Checklist <span class="muted tiny">one step per line (optional)</span><textarea name="items" rows="3" placeholder="Script\nShoot\nEdit\nClient approval"></textarea></label>`}
+      ${t ? '' : `<label class="f" id="assign-wrap" hidden>Assign to <span class="muted tiny">(optional)</span><select name="assignee_id"></select></label>`}
+    </div>`,
+    submit: t ? 'Save' : 'Create task',
+    onSubmit: async (d) => {
+      const body = { ...d, start_date: d.start_date || null, due_date: d.due_date || null };
+      if (t) {
+        if (!t.can.change_department) delete body.department;
+        await api(`/tasks/${t.id}`, { method: 'PATCH', body });
+        toast('Saved', 'success');
+        setTimeout(() => openTask(t.id), 60);
+      } else {
+        body.items = String(d.items || '').split('\n').map((x) => x.trim()).filter(Boolean);
+        body.assignee_id = d.assignee_id ? Number(d.assignee_id) : null;
+        const row = await api('/tasks', { method: 'POST', body });
+        confetti({ count: 50 });
+        toast(body.assignee_id ? 'Task assigned' : `Sent to ${body.department}. Their lead will assign it`, 'success');
+        if (parseHash().path === 'tasks') await taskReload?.();
+        else go(`#/tasks?scope=${me.role === 'owner' ? 'all' : me.role === 'lead' ? 'team' : 'created'}`);
+        return row;
+      }
+      await taskReload?.();
+    },
+  });
+  // Show "Assign to" only for departments this person may assign in, with each member's workload.
+  const form = $('#modal form');
+  const syncAssign = () => {
+    const wrap = $('#assign-wrap', form);
+    if (!wrap) return;
+    const d = form.department.value;
+    const people = m.people.filter((p) => p.department === d);
+    wrap.hidden = !canPick(d) || !people.length;
+    form.assignee_id.innerHTML = `<option value="">Leave for the lead to assign</option>${people.map((p) => `<option value="${p.id}">${esc(p.name)} · ${p.open_tasks} open</option>`).join('')}`;
+    if (me.role === 'lead' && d === me.department) form.assignee_id.options[0].textContent = 'Not yet';
+  };
+  form.department.onchange = syncAssign;
+  syncAssign();
+}
+
+async function openTask(id) {
+  const dlg = $('#modal');
+  let t;
+  try {
+    t = await api(`/tasks/${id}`);
+  } catch (err) {
+    return toast(err.message, 'error');
+  }
+  const isMine = t.assignee_id === me.id;
+  const next = [];
+  if (t.status === 'todo' && t.can.work && t.assignee_id) next.push(['in_progress', '▶️ Start', '']);
+  if (t.status === 'in_progress' && t.can.work) next.push(['review', '👀 Send for review', '']);
+  if (t.status === 'review' && t.can.manage) next.push(['done', '✅ Approve', 'green'], ['in_progress', '↩️ Send back', 'light']);
+  if (t.status === 'done' && t.can.manage) next.push(['in_progress', 'Reopen', 'light']);
+  if (t.status === 'review' && isMine && !t.can.manage) next.push(['in_progress', 'Keep working', 'light']);
+  const people = (taskMeta?.people || []).filter((p) => p.department === t.department);
+  const when = (iso) => new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+  dlg.className = 'modal task-modal';
+  dlg.innerHTML = `<div class="card">
+    <div class="row between" style="align-items:flex-start;gap:10px">
+      <div class="task-tags">${chip(TASK_STATUS, t.status)}<span class="chip ${PRIORITY[t.priority][1]}">${icon('flag')}${PRIORITY[t.priority][0]}</span>${t.client ? `<span class="chip">${esc(t.client)}</span>` : ''}</div>
+      <div class="row" style="gap:6px">${t.can.manage ? `<button class="icon-btn sm" data-act="edit" aria-label="Edit">${icon('pen')}</button>` : ''}
+        ${t.can.delete ? `<button class="icon-btn sm" data-act="delete" aria-label="Delete task" title="Delete task">${icon('trash')}</button>` : ''}
+        <button class="icon-btn ghost" data-close aria-label="Close">${icon('x')}</button></div>
+    </div>
+    <h2 class="task-title">${esc(t.title)}</h2>
+    <div class="task-meta">
+      <div><span>Department</span><strong>${esc(t.department)}</strong></div>
+      <div><span>Assigned to</span>${t.can.assign
+        ? `<select id="t-assign"><option value="">Unassigned</option>${people.map((p) => `<option value="${p.id}" ${p.id === t.assignee_id ? 'selected' : ''}>${esc(p.name)} · ${p.open_tasks} open</option>`).join('')}</select>`
+        : `<strong>${t.assignee_name ? esc(t.assignee_name) : '<span class="chip amber">Waiting for the lead</span>'}</strong>`}</div>
+      <div><span>Requested by</span><strong>${esc(t.created_by_name || '—')}</strong></div>
+      <div><span>Due</span><strong>${t.due_date ? `${dueChip(t)}` : '—'}</strong></div>
+    </div>
+    ${next.length ? `<div class="row wrap task-actions">${next.map(([s, label, cls]) => `<button class="btn ${cls}" data-status="${s}">${label}</button>`).join('')}</div>` : ''}
+    ${t.description ? `<div class="task-brief">${esc(t.description).replace(/\n/g, '<br>').replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')}</div>` : ''}
+    <div class="task-section">
+      <div class="row between"><h3>Checklist</h3><span class="muted small num">${t.items.filter((i) => i.done).length}/${t.items.length}</span></div>
+      ${t.items.length ? `<div class="task-progress big"><i style="width:${pct(t.items.filter((i) => i.done).length, t.items.length)}%"></i></div>` : ''}
+      <div class="task-items">${t.items.map((i) => `<label class="task-item ${i.done ? 'done' : ''}"><input type="checkbox" data-item="${i.id}" ${i.done ? 'checked' : ''} ${t.can.work ? '' : 'disabled'}><span>${esc(i.text)}</span>
+        ${t.can.manage ? `<button type="button" class="icon-btn xs ghost" data-del-item="${i.id}" aria-label="Remove">${icon('x')}</button>` : ''}</label>`).join('')}</div>
+      ${t.can.work ? `<form class="row task-add" id="t-item"><input name="text" maxlength="200" placeholder="Add a step…" autocomplete="off"><button class="btn sm light" type="submit">${icon('plus')}</button></form>` : ''}
+    </div>
+    <div class="task-section">
+      <h3>Activity</h3>
+      <div class="task-feed">${t.comments.map((c) => c.kind === 'event'
+        ? `<div class="task-event"><span class="dot"></span><span><b>${esc(c.user_name || 'Someone')}</b> ${esc(c.body)}</span><span class="tiny muted">${when(c.created_at)}</span></div>`
+        : `<div class="task-comment ${c.user_id === me.id ? 'mine' : ''}">${avatar(c.user_name || '?', 'sm')}<div><div class="row between"><b class="small">${esc(c.user_name || '')}</b><span class="tiny muted">${when(c.created_at)}</span></div><p>${esc(c.body).replace(/\n/g, '<br>')}</p></div></div>`).join('')}</div>
+      <form class="task-reply" id="t-comment"><textarea name="body" rows="1" maxlength="2000" placeholder="Write a comment…"></textarea><button class="btn" type="submit" aria-label="Send">${icon('arrow')}</button></form>
+    </div>
+  </div>`;
+  const reopen = async (msg) => {
+    if (msg) toast(msg, 'success');
+    await openTask(id);
+    taskReload?.();
+    refreshCounts().then(() => renderShell(parseHash().path));
+  };
+  $$('[data-close]', dlg).forEach((b) => (b.onclick = () => dlg.close()));
+  dlg.onclose = () => { dlg.className = 'modal'; };
+  dlg.onclick = (e) => { if (e.target === dlg) dlg.close(); };
+  $$('[data-status]', dlg).forEach((b) => (b.onclick = () => act(b, async () => {
+    await api(`/tasks/${id}`, { method: 'PATCH', body: { status: b.dataset.status } });
+    if (b.dataset.status === 'done') { confetti({ count: 90 }); chime(); }
+    await reopen(`${TASK_STATUS[b.dataset.status][0]}`);
+  })));
+  $('#t-assign', dlg)?.addEventListener('change', (e) => act(e.target, async () => {
+    await api(`/tasks/${id}`, { method: 'PATCH', body: { assignee_id: e.target.value ? Number(e.target.value) : null } });
+    await reopen(e.target.value ? `Assigned to ${e.target.selectedOptions[0].textContent.split(' · ')[0]}` : 'Unassigned');
+  }));
+  $$('[data-item]', dlg).forEach((c) => (c.onchange = async () => {
+    try {
+      await api(`/tasks/${id}/items/${c.dataset.item}/toggle`, { method: 'POST', body: {} });
+      if (c.checked) haptic(15);
+      await reopen();
+    } catch (err) { toast(err.message, 'error'); }
+  }));
+  $$('[data-del-item]', dlg).forEach((b) => (b.onclick = (e) => {
+    e.preventDefault();
+    act(b, async () => { await api(`/tasks/${id}/items/${b.dataset.delItem}/delete`, { method: 'POST', body: {} }); await reopen(); });
+  }));
+  $('#t-item', dlg)?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = e.target.text.value.trim();
+    if (text) act(e.submitter, async () => { await api(`/tasks/${id}/items`, { method: 'POST', body: { text } }); await reopen(); });
+  });
+  const reply = $('#t-comment', dlg);
+  reply.body.oninput = () => { reply.body.style.height = 'auto'; reply.body.style.height = `${Math.min(140, reply.body.scrollHeight)}px`; };
+  reply.onsubmit = (e) => {
+    e.preventDefault();
+    const body = reply.body.value.trim();
+    if (body) act(e.submitter, async () => { await api(`/tasks/${id}/comments`, { method: 'POST', body: { body } }); await reopen(); });
+  };
+  $('[data-act=edit]', dlg)?.addEventListener('click', () => taskForm(t));
+  $('[data-act=delete]', dlg)?.addEventListener('click', () => confirmBox('Delete this task?', 'Its checklist and comments are deleted too.', async () => {
+    await api(`/tasks/${id}/delete`, { method: 'POST', body: {} });
+    toast('Task deleted', 'success');
+    taskReload?.();
+  }, { submit: 'Delete' }));
+  if (!dlg.open) dlg.showModal();
+  if (parseHash().params.get('task')) history.replaceState(null, '', location.href.replace(/([?&])task=\d+&?/, '$1').replace(/[?&]$/, ''));
+}
+
+// Compact "my tasks" card for the employee home page.
+function myTasksCard(list) {
+  const open = list.filter((t) => t.status !== 'done').slice(0, 4);
+  if (!open.length) return '';
+  return `<div class="card"><div class="card-head"><h2>My tasks</h2><a class="btn sm light" href="#/tasks">All</a></div>
+    <div class="list">${open.map((t) => `<a class="list-item" href="#/tasks?task=${t.id}" style="text-decoration:none">
+      <span class="avatar sm ${TASK_STATUS[t.status][1]}">${icon('kanban')}</span>
+      <div class="grow"><strong>${esc(t.title)}</strong><span>${[t.client, TASK_STATUS[t.status][0]].filter(Boolean).map(esc).join(' · ')}</span></div>${dueChip(t)}</a>`).join('')}</div></div>`;
 }
 
 // ---------- Culture: kudos, wall, people, profiles ----------

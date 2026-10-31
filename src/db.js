@@ -204,6 +204,48 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS audit_log_created ON audit_log (created_at DESC);
+
+-- Tasks: account managers send client work to a department; the department lead assigns it to a member.
+CREATE TABLE IF NOT EXISTS tasks (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  client TEXT,
+  department TEXT NOT NULL,
+  assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'review', 'done')),
+  priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
+  start_date TEXT,
+  due_date TEXT,
+  assigned_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS tasks_assignee ON tasks (assignee_id, status);
+CREATE INDEX IF NOT EXISTS tasks_department ON tasks (department, status);
+
+-- Checklist inside a task (progress = done / total).
+CREATE TABLE IF NOT EXISTS task_items (
+  id SERIAL PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  done INTEGER NOT NULL DEFAULT 0,
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS task_items_task ON task_items (task_id);
+
+-- Conversation and history on a task (kind 'event' = automatic: created, assigned, moved...).
+CREATE TABLE IF NOT EXISTS task_comments (
+  id SERIAL PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL DEFAULT 'comment' CHECK (kind IN ('comment', 'event')),
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS task_comments_task ON task_comments (task_id, id);
 `;
 
 const DEFAULT_SETTINGS = {
@@ -250,6 +292,8 @@ const DEFAULT_SETTINGS = {
   sick_leave_days: 7,
   // Payroll
   payroll_add_rewards: false,
+  // Members of this department (account managers) can send tasks to other departments.
+  am_department: 'Account Management',
   weekly_summary: true,
 };
 

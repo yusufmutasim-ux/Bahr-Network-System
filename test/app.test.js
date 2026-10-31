@@ -452,6 +452,66 @@ test('weekly summary, activity log and Excel backup', async () => {
   assert.ok(!wb.getWorksheet('Staff').getRow(1).values.includes('password_hash'));
 });
 
+test('tasks: account manager → department lead → team member, with review', async () => {
+  const am = client(UA.laptop);
+  await owner('/admin/users', { method: 'POST', body: { name: 'Amira AM', username: 'amira', password: 'pass123', department: 'Account Management' } });
+  assert.equal((await am('/login', { method: 'POST', body: { username: 'amira', password: 'pass123' } })).status, 200);
+  const body = { title: 'Ramadan reel', client: 'Nike', department: 'Design', priority: 'urgent', due_date: '2026-03-10', items: ['Script', 'Shoot', 'Edit'], assignee_id: dinaId };
+  assert.equal((await emp('/tasks', { method: 'POST', body })).status, 403); // regular employee
+  assert.equal((await am('/tasks', { method: 'POST', body: { ...body, department: 'Nope' } })).status, 400);
+  const created = await am('/tasks', { method: 'POST', body });
+  assert.equal(created.status, 201);
+  const id = created.body.id;
+  assert.equal(created.body.assignee_id, null); // AMs send work to the department, the lead picks the person
+  assert.equal((await am('/tasks/meta')).body.is_am, true);
+
+  // The Design lead sees it in the inbox; Dina doesn't see it yet.
+  assert.deepEqual((await lead('/tasks?scope=inbox')).body.map((t) => t.id), [id]);
+  assert.equal((await lead('/tasks/meta')).body.counts.inbox, 1);
+  assert.ok((await lead('/tasks/meta')).body.people.every((p) => p.department === 'Design'));
+  assert.equal((await dina(`/tasks/${id}`)).status, 404);
+  assert.equal((await am(`/tasks/${id}`, { method: 'PATCH', body: { assignee_id: dinaId } })).status, 403);
+  assert.equal((await lead(`/tasks/${id}`, { method: 'PATCH', body: { assignee_id: empId } })).status, 400); // not in Design
+  assert.equal((await lead(`/tasks/${id}`, { method: 'PATCH', body: { assignee_id: dinaId } })).status, 200);
+
+  // Dina works on it: ticking an item starts it; she can send it for review but not close it.
+  const mine = (await dina('/tasks?scope=mine')).body;
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].items_total, 3);
+  const detail = (await dina(`/tasks/${id}`)).body;
+  assert.equal(detail.can.manage, false);
+  assert.equal(detail.can.work, true);
+  await dina(`/tasks/${id}/items/${detail.items[0].id}/toggle`, { method: 'POST', body: {} });
+  assert.equal((await dina(`/tasks/${id}`)).body.status, 'in_progress');
+  assert.equal((await dina(`/tasks/${id}`, { method: 'PATCH', body: { title: 'x' } })).status, 403);
+  assert.equal((await dina(`/tasks/${id}`, { method: 'PATCH', body: { status: 'done' } })).status, 403);
+  assert.equal((await dina(`/tasks/${id}`, { method: 'PATCH', body: { status: 'review' } })).status, 200);
+  assert.equal((await am('/tasks/meta')).body.counts.to_review, 1);
+  // The AM sends it back with a comment, then approves the second round.
+  assert.equal((await am(`/tasks/${id}/comments`, { method: 'POST', body: { body: 'Logo needs to be bigger' } })).status, 201);
+  assert.equal((await am(`/tasks/${id}`, { method: 'PATCH', body: { status: 'in_progress' } })).status, 200);
+  await dina(`/tasks/${id}`, { method: 'PATCH', body: { status: 'review' } });
+  assert.equal((await am(`/tasks/${id}`, { method: 'PATCH', body: { status: 'done' } })).status, 200);
+  const done = (await dina(`/tasks/${id}`)).body;
+  assert.equal(done.status, 'done');
+  assert.ok(done.completed_at);
+  assert.ok(done.comments.some((c) => c.kind === 'comment' && c.user_name === 'Amira AM'));
+  assert.ok(done.comments.some((c) => c.kind === 'event' && /sent it back/.test(c.body)));
+  assert.ok(done.comments.some((c) => c.kind === 'event' && /assigned the task to Dina/.test(c.body)));
+
+  // Moving a task to another department sends it to that department's inbox and out of Design's view.
+  const t2 = (await am('/tasks', { method: 'POST', body: { title: 'Caption pack', department: 'Design' } })).body;
+  assert.equal((await am(`/tasks/${t2.id}`, { method: 'PATCH', body: { department: 'Content' } })).status, 200);
+  assert.equal((await lead(`/tasks/${t2.id}`)).status, 404);
+  assert.equal((await owner('/tasks?scope=all')).body.length, 2);
+  // Only owners delete started work; a creator can delete their own task while it's still To do.
+  assert.equal((await am(`/tasks/${id}/delete`, { method: 'POST', body: {} })).status, 403);
+  assert.equal((await am(`/tasks/${t2.id}/delete`, { method: 'POST', body: {} })).status, 200);
+  const log = (await owner('/admin/audit')).body;
+  assert.ok(log.some((x) => x.action === 'task.assign' && x.actor_name === 'Lina Lead'));
+  assert.equal(typeof (await emp('/cron/daily')).body.tasks, 'number');
+});
+
 test('rejects non-JSON writes', async () => {
   const res = await fetch(`${base}/api/login`, { method: 'POST', body: 'username=a&password=b', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
   assert.equal(res.status, 415);

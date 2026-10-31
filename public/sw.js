@@ -1,5 +1,5 @@
 /* Bahr Network service worker: offline app shell + push notifications. */
-const VERSION = 'bahr-v5';
+const VERSION = 'bahr-v6';
 const SHELL = ['/', '/index.html', '/app.js', '/styles.css', '/icon.svg', '/manifest.webmanifest',
   '/icons/icon-192.png', '/icons/badge-96.png', '/icons/apple-touch-icon.png'];
 
