@@ -3873,6 +3873,13 @@ async function openTask(id) {
   if (t.status === 'review' && t.can.manage) next.push(['done', '✅ Approve', 'green'], ['in_progress', '↩️ Send back', 'light']);
   if (t.status === 'done' && t.can.manage) next.push(['in_progress', 'Reopen', 'light']);
   if (t.status === 'review' && isMine && !t.can.manage) next.push(['in_progress', 'Keep working', 'light']);
+  // Status bar: every stage this person may move the task to (works on phones, where there's no drag & drop).
+  const canMove = t.can.manage || isMine;
+  const reachable = (k) => k === t.status || (canMove && (t.can.manage || k !== 'done') && (k === 'todo' || t.assignee_id));
+  const statusBar = canMove ? `<div class="task-status" role="group" aria-label="Status">${Object.entries(TASK_STATUS).map(([k, [label, c]]) =>
+    `<button type="button" class="${k === t.status ? `on ${c}` : ''}" data-status="${k}" ${k === t.status || !reachable(k) ? 'disabled' : ''}
+      title="${!reachable(k) ? (k === 'done' ? 'The requester or the lead approves it' : 'Assign the task to someone first') : `Move to ${label}`}"><span class="dot ${c}"></span>${label}</button>`).join('')}</div>
+    ${!t.assignee_id && t.can.manage ? `<p class="tiny muted" style="margin-top:6px">Assign it to someone to move it past To do.</p>` : ''}` : '';
   const people = (taskMeta?.people || []).filter((p) => p.department === t.department);
   const when = (iso) => new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
@@ -3894,6 +3901,7 @@ async function openTask(id) {
       <div><span>Requested by</span><strong>${esc(t.created_by_name || '—')}</strong></div>
       <div><span>Due</span><strong>${t.due_date ? `${dueChip(t)}` : '—'}</strong></div>
     </div>
+    ${statusBar}
     ${next.length ? `<div class="row wrap task-actions">${next.map(([s, label, cls]) => `<button class="btn ${cls}" data-status="${s}">${label}</button>`).join('')}</div>` : ''}
     ${t.description ? `<div class="task-brief">${esc(t.description).replace(/\n/g, '<br>').replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')}</div>` : ''}
     <div class="task-section">

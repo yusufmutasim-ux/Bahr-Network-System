@@ -1182,3 +1182,13 @@ dialog.task-modal .card { max-height: 88vh; overflow-y: auto; }
 .client-notes { margin-top: 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cpick-add .grow { display: block; }
+.task-status { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin-top: 14px; padding: 4px; border-radius: 14px; background: var(--sunken); }
+.task-status button {
+  display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; padding: 0 6px; border: 0; border-radius: 10px;
+  background: none; font: 600 .78rem/1.1 inherit; color: var(--muted); cursor: pointer; white-space: nowrap;
+}
+.task-status button .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+.task-status button:not(:disabled):hover { background: var(--surface-solid); color: var(--ink); }
+.task-status button.on { background: var(--surface-solid); color: var(--ink); box-shadow: var(--shadow); cursor: default; }
+.task-status button:disabled:not(.on) { opacity: .4; cursor: not-allowed; }
+@media (max-width: 640px) { .task-status button { font-size: .72rem; gap: 4px; padding: 0 2px; } }
